@@ -1,0 +1,6 @@
+{
+  "name": "Network Monitor",
+  "description": "Advanced network topology discovery, active status visualization, ping latency tracking, and credential vault dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
