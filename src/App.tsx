@@ -17,6 +17,7 @@ import SnapshotManager from './components/SnapshotManager.js';
 import ActivityLogs from './components/ActivityLogs.js';
 import PerformanceMonitor from './components/PerformanceMonitor.js';
 import ReportManager from './components/ReportManager.js';
+import ScanProgressMonitor from './components/ScanProgressMonitor.js';
 import { 
   Network, 
   LayoutGrid, 
@@ -40,7 +41,8 @@ import {
   X,
   AlertTriangle,
   Cpu,
-  FileText
+  FileText,
+  Download
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -460,6 +462,23 @@ export default function App() {
     }
   };
 
+  const handleEditRange = async (id: string, range: Partial<ScanRange>) => {
+    try {
+      const res = await fetch(`/api/ranges/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(range)
+      });
+      const data = await res.json();
+      if (data.success) {
+        setRanges(data.ranges);
+        fetchLogsOnly();
+      }
+    } catch (err) {
+      console.error('Error updating subnet range:', err);
+    }
+  };
+
   const handleDeleteRange = async (id: string) => {
     try {
       const res = await fetch(`/api/ranges/${id}`, { method: 'DELETE' });
@@ -483,7 +502,6 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success) {
-        // Refetch credentials
         const credsRes = await fetch('/api/credentials');
         const creds = await credsRes.json();
         setCredentials(creds);
@@ -491,6 +509,25 @@ export default function App() {
       }
     } catch (err) {
       console.error('Error writing credential:', err);
+    }
+  };
+
+  const handleEditCredential = async (id: string, cred: Partial<Credential>) => {
+    try {
+      const res = await fetch(`/api/credentials/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cred)
+      });
+      const data = await res.json();
+      if (data.success) {
+        const credsRes = await fetch('/api/credentials');
+        const creds = await credsRes.json();
+        setCredentials(creds);
+        fetchLogsOnly();
+      }
+    } catch (err) {
+      console.error('Error updating credential:', err);
     }
   };
 
@@ -715,6 +752,18 @@ export default function App() {
               {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
             </button>
 
+            {/* Ubuntu Deployment Guide Download button */}
+            <a
+              id="btn_download_ubuntu_guide"
+              href="/api/download/ubuntu-guide"
+              download="Ubuntu_24.04_LTS_Deployment_Guide.md"
+              className="px-3 py-2 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 rounded-xl font-bold text-xs flex items-center gap-1.5 transition"
+              title="Download Ubuntu 24.04 LTS Server Deployment Guide"
+            >
+              <Download className="w-3.5 h-3.5 text-emerald-500" />
+              <span className="hidden md:inline">Ubuntu Deployment Guide</span>
+            </a>
+
             {/* Sweep Control button */}
             <button
               id="btn_trigger_sweep_header"
@@ -917,6 +966,9 @@ export default function App() {
         {/* ACTIVE MODULE CONTAINER */}
         <div id="active_tab_module_container" className="mt-6">
           
+          {/* REAL-TIME SUBNET SCANNING MONITOR */}
+          <ScanProgressMonitor onScanComplete={fetchData} />
+
           {/* TAB: MONITOR */}
           {activeTab === 'monitor' && (
             <div className="space-y-6">
@@ -994,6 +1046,7 @@ export default function App() {
               ranges={ranges}
               currentUserRole={currentUser?.role || 'operator'}
               onAddRange={handleAddRange}
+              onEditRange={handleEditRange}
               onDeleteRange={handleDeleteRange}
               settings={settings}
               onUpdateSettings={handleUpdateSettings}
@@ -1007,6 +1060,7 @@ export default function App() {
               devices={devices}
               currentUserRole={currentUser?.role || 'operator'}
               onAddCredential={handleAddCredential}
+              onEditCredential={handleEditCredential}
               onDeleteCredential={handleDeleteCredential}
             />
           )}

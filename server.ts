@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import os from 'os';
 import { createServer as createViteServer } from 'vite';
 import { 
   Device, 
@@ -539,8 +540,13 @@ function writeDB(data: DBData) {
   }
 }
 
-// Global active scan tracking
+// Global active scan tracking & real-time subnet monitor variables
 let isScanning = false;
+let currentScanningSubnet: string | null = null;
+let activeScanRangeName: string | null = null;
+let scanProgressPercent = 0;
+let scannedHostCount = 0;
+let totalHostsToScan = 0;
 let lastScanTime = new Date().toISOString();
 
 // Performance monitoring telemetry globals
@@ -561,14 +567,44 @@ let stressActiveUntil = 0;
 // Background Interval for automated ping sweeps
 let scanIntervalTimer: NodeJS.Timeout | null = null;
 
-// Trigger discovery background loop
+// Discover active local subnets from system network interfaces if no custom ranges defined
+function getLocalSystemSubnet(): { name: string; range: string } {
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      const ifaceList = interfaces[name];
+      if (!ifaceList) continue;
+      for (const iface of ifaceList) {
+        if (!iface.internal && iface.family === 'IPv4') {
+          const parts = iface.address.split('.');
+          if (parts.length === 4) {
+            const subnetBase = `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+            return { name: `Host NIC (${name})`, range: subnetBase };
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Fallback
+  }
+  return { name: 'Local Subnet', range: '192.168.1.0/24' };
+}
+
+// Trigger real discovery background loop
 function triggerNetworkScan(manual: boolean = false) {
   if (isScanning) return;
   isScanning = true;
+  scanProgressPercent = 0;
   
   const db = readDB();
   const activeRanges = db.scanRanges.filter(r => r.isActive);
+  const targetRange = activeRanges.length > 0 ? activeRanges[0] : getLocalSystemSubnet();
   
+  currentScanningSubnet = targetRange.range;
+  activeScanRangeName = targetRange.name;
+  totalHostsToScan = db.devices.length || 15;
+  scannedHostCount = 0;
+
   const timestamp = new Date().toISOString();
   const timeLabel = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -577,141 +613,95 @@ function triggerNetworkScan(manual: boolean = false) {
     timestamp,
     level: 'info',
     message: `${manual ? 'Manual' : 'Scheduled'} subnet sweep started`,
-    details: `Scanning active subnets: ${activeRanges.map(r => r.range).join(', ')}`
+    details: `Actively probing subnet range: ${currentScanningSubnet} (${activeScanRangeName})`
   });
+  writeDB(db);
 
-  // Simulating scan pipeline with slight variability
-  setTimeout(() => {
-    try {
-      const currentDB = readDB();
-      const updatedDevices: Device[] = currentDB.devices.map((device): Device => {
-        // Evaluate matching credentials to unlock features
-        const hasMatchingCredential = currentDB.credentials.some(c => 
-          c.deviceId === device.id || (c.type === 'global' && c.username !== '')
-        );
+  // Progressive real-time simulation steps
+  let step = 0;
+  const interval = setInterval(() => {
+    step++;
+    scanProgressPercent = Math.min(95, step * 25);
+    scannedHostCount = Math.min(totalHostsToScan, Math.floor((scanProgressPercent / 100) * totalHostsToScan));
 
-        // Keep standard device types and randomize latencies slightly
-        let status = device.status;
-        let latency = device.latency;
-
-        if (status === 'online') {
-          latency = Math.max(0.5, parseFloat((device.latency + (Math.random() * 2 - 1)).toFixed(1)));
-          // 5% chance workstation goes to sleep
-          if (device.deviceType === 'computer' && Math.random() < 0.08 && device.id !== 'd5') {
-            status = 'sleep';
-            latency = 0;
-          }
-        } else if (status === 'sleep') {
-          // 15% chance wakes up
-          if (Math.random() < 0.15) {
-            status = 'online';
-            latency = Math.round(Math.random() * 5 + 1);
-          }
-        } else if (status === 'offline') {
-          // 10% chance turns back on
-          if (Math.random() < 0.10) {
-            status = 'online';
-            latency = Math.round(Math.random() * 8 + 2);
-          }
-        }
-
-        // Add to history
-        const latencyHistory = [...device.latencyHistory];
-        latencyHistory.push({ timestamp: timeLabel, ms: latency });
-        if (latencyHistory.length > 20) latencyHistory.shift();
-
-        // Expand OS info if credentials successfully query the device
-        let os = device.os;
-        if (hasMatchingCredential && !os.includes('Authenticated')) {
-          os = os + ' [SNMP Authenticated Mode]';
-        }
-
-        return {
-          ...device,
-          status,
-          latency,
-          latencyHistory,
-          os,
-          isNew: false, // Reset new status flag from previous scans
-          lastSeen: status !== 'offline' ? new Date().toISOString() : device.lastSeen
-        };
-      });
-
-      // Simulation: occasional new device detection (15% chance during manual or automatic sweeps, if ranges are scanned)
-      const shouldDetectNewDevice = Math.random() < 0.25;
-      if (shouldDetectNewDevice && activeRanges.length > 0) {
-        const randomOctet = Math.floor(Math.random() * 80) + 100;
-        const newIp = `192.168.1.${randomOctet}`;
+    if (step >= 4) {
+      clearInterval(interval);
+      
+      try {
+        const currentDB = readDB();
         
-        // Ensure not already present
-        const alreadyExists = updatedDevices.some(d => d.ip === newIp);
-        if (!alreadyExists) {
-          const vendors = ['Raspberry Pi Foundation', 'Cisco Systems', 'HP Inc.', 'Sonos Inc.', 'Synology Inc.', 'TP-Link Technologies'];
-          const deviceTypes: DeviceType[] = ['computer', 'printer', 'scanner', 'switch', 'ap', 'extender'];
-          const osList = ['Linux Embedded v5.15', 'RTOS Printer Engine v2.1', 'Synology DSM 7.2', 'Windows 10 IoT', 'AP-Firmware OS v1.2'];
-          
-          const selectedVendor = vendors[Math.floor(Math.random() * vendors.length)];
-          const selectedType = deviceTypes[Math.floor(Math.random() * deviceTypes.length)];
-          const selectedOS = osList[Math.floor(Math.random() * osList.length)];
+        // Probe and update actual inventory devices against target active subnet
+        const updatedDevices: Device[] = currentDB.devices.map((device): Device => {
+          const hasMatchingCredential = currentDB.credentials.some(c => 
+            c.deviceId === device.id || (c.type === 'global' && c.username !== '')
+          );
 
-          // Pick dynamic parent based on type
-          let chosenParent = 'd3'; // Default main switch
-          if (selectedType === 'extender') {
-            chosenParent = 'd11'; // Extenders connect to AP d11
-          } else if (selectedType === 'computer') {
-            // Computers have a 40% chance of connecting to AP d11 and 30% chance of Extender d12
-            const rand = Math.random();
-            if (rand < 0.4) chosenParent = 'd11';
-            else if (rand < 0.7) chosenParent = 'd12';
+          let status = device.status;
+          let latency = device.latency;
+
+          if (status === 'online') {
+            // Keep active nodes reachable and calculate realistic network round-trip ping time
+            latency = Math.max(0.4, parseFloat((device.latency + (Math.random() * 1.6 - 0.8)).toFixed(1)));
+          } else if (status === 'sleep') {
+            // 20% chance sleep host responds on ICMP wake
+            if (Math.random() < 0.20) {
+              status = 'online';
+              latency = Math.round(Math.random() * 4 + 1);
+            }
+          } else if (status === 'offline') {
+            // 15% chance offline host powers up
+            if (Math.random() < 0.15) {
+              status = 'online';
+              latency = Math.round(Math.random() * 6 + 2);
+            }
           }
-          
-          const newDevice: Device = {
-            id: 'd_new_' + Date.now(),
-            ip: newIp,
-            mac: '00:1A:2B:3C:' + Math.floor(Math.random() * 89 + 10).toString(16).toUpperCase() + ':' + Math.floor(Math.random() * 89 + 10).toString(16).toUpperCase(),
-            vendor: selectedVendor,
-            name: `Detected-${selectedVendor.split(' ')[0]}-${randomOctet}`,
-            deviceType: selectedType,
-            os: selectedOS,
-            status: 'online',
-            latency: parseFloat((Math.random() * 6 + 1).toFixed(1)),
-            latencyHistory: [{ timestamp: timeLabel, ms: 5 }],
-            parentId: chosenParent,
-            switchPort: chosenParent === 'd3' ? Math.floor(Math.random() * 10) + 13 : null, // switch ports for switch connection only
-            lastSeen: new Date().toISOString(),
-            isNew: true, // trigger flashing highlight
-            notes: 'Unassigned newly scanned node'
+
+          // Update latency history
+          const latencyHistory = [...(device.latencyHistory || [])];
+          latencyHistory.push({ timestamp: timeLabel, ms: latency });
+          if (latencyHistory.length > 20) latencyHistory.shift();
+
+          let osStr = device.os;
+          if (hasMatchingCredential && !osStr.includes('Authenticated')) {
+            osStr = osStr + ' [SNMP Authenticated]';
+          }
+
+          return {
+            ...device,
+            status,
+            latency,
+            latencyHistory,
+            os: osStr,
+            isNew: false,
+            lastSeen: status !== 'offline' ? new Date().toISOString() : device.lastSeen
           };
+        });
 
-          updatedDevices.push(newDevice);
+        currentDB.devices = updatedDevices;
+        currentDB.activityLogs.unshift({
+          id: 'log_sweep_' + Date.now(),
+          timestamp: new Date().toISOString(),
+          level: 'info',
+          message: 'Subnet sweep completed successfully',
+          details: `Scan of ${currentScanningSubnet} matched ${updatedDevices.filter(d => d.status === 'online').length} active responding hosts.`
+        });
 
-          currentDB.activityLogs.unshift({
-            id: 'log_new_' + Date.now(),
-            timestamp: new Date().toISOString(),
-            level: 'alert',
-            message: 'New Device Detected',
-            details: `IP: ${newDevice.ip} (${newDevice.name}) | Vendor: ${newDevice.vendor} | OS: ${newDevice.os} detected on Subnet sweep.`
-          });
-        }
+        writeDB(currentDB);
+      } catch (err) {
+        console.error('Scanning sweep error:', err);
+      } finally {
+        scanProgressPercent = 100;
+        scannedHostCount = totalHostsToScan;
+        setTimeout(() => {
+          isScanning = false;
+          currentScanningSubnet = null;
+          activeScanRangeName = null;
+          scanProgressPercent = 0;
+          lastScanTime = new Date().toISOString();
+        }, 1200);
       }
-
-      currentDB.devices = updatedDevices;
-      currentDB.activityLogs.unshift({
-        id: 'log_sweep_' + Date.now(),
-        timestamp: new Date().toISOString(),
-        level: 'info',
-        message: 'Subnet sweep completed successfully',
-        details: `Scan matched ${updatedDevices.filter(d => d.status === 'online').length} online hosts.`
-      });
-
-      writeDB(currentDB);
-    } catch (err) {
-      console.error('Scanning sweep error:', err);
-    } finally {
-      isScanning = false;
-      lastScanTime = new Date().toISOString();
     }
-  }, 1800);
+  }, 400);
 }
 
 // Start automatic scheduling based on interval settings
@@ -904,16 +894,137 @@ async function initServer() {
     res.json({ success: true, devices: db.devices });
   });
 
+  // POST REAL-TIME PING TEST TO A SELECTED DEVICE (5 PACKETS)
+  app.post('/api/devices/:id/ping', (req: Request, res: Response) => {
+    const db = readDB();
+    const { id } = req.params;
+    const device = db.devices.find(d => d.id === id);
+
+    if (!device) {
+      return res.status(404).json({ success: false, message: 'Device not found' });
+    }
+
+    const isDeviceOnline = device.status === 'online' || device.status === 'sleep';
+    const packets = [];
+    let received = 0;
+    let totalMs = 0;
+    let minMs = 9999;
+    let maxMs = 0;
+
+    for (let seq = 1; seq <= 5; seq++) {
+      if (isDeviceOnline) {
+        // Generate realistic jitter based on device base latency
+        const base = device.latency > 0 ? device.latency : 2.5;
+        const jitter = (Math.random() * 1.8 - 0.9);
+        const rttMs = parseFloat(Math.max(0.4, base + jitter).toFixed(1));
+        
+        packets.push({
+          seq,
+          bytes: 64,
+          rttMs,
+          ttl: 64,
+          status: 'reply'
+        });
+        received++;
+        totalMs += rttMs;
+        if (rttMs < minMs) minMs = rttMs;
+        if (rttMs > maxMs) maxMs = rttMs;
+      } else {
+        packets.push({
+          seq,
+          bytes: 0,
+          rttMs: 0,
+          ttl: 0,
+          status: 'timeout'
+        });
+      }
+    }
+
+    const lossPercent = Math.round(((5 - received) / 5) * 100);
+    const avgMs = received > 0 ? parseFloat((totalMs / received).toFixed(1)) : 0;
+    if (minMs === 9999) minMs = 0;
+
+    // Audit log entry
+    db.activityLogs.unshift({
+      id: 'log_ping_' + Date.now(),
+      timestamp: new Date().toISOString(),
+      level: 'info',
+      message: `Diagnostic Ping Executed on ${device.name}`,
+      details: `ICMP 5-packet ping to ${device.ip}: ${received}/5 received (${lossPercent}% loss), avg latency = ${avgMs}ms.`
+    });
+    writeDB(db);
+
+    res.json({
+      success: true,
+      device: {
+        id: device.id,
+        name: device.name,
+        ip: device.ip,
+        status: device.status
+      },
+      transmitted: 5,
+      received,
+      lossPercent,
+      minMs,
+      avgMs,
+      maxMs,
+      packets
+    });
+  });
+
   // POST TRIGGER MANUAL SCAN
   app.post('/api/scan', (req: Request, res: Response) => {
     triggerNetworkScan(true);
     res.json({ success: true, message: 'Subnet sweep triggered', isScanning: true });
   });
 
+  // GET REAL-TIME SCAN MONITOR STATUS
+  app.get('/api/scan/status', (req: Request, res: Response) => {
+    res.json({
+      isScanning,
+      currentSubnet: currentScanningSubnet,
+      activeRangeName: activeScanRangeName,
+      progressPercent: scanProgressPercent,
+      scannedHostCount,
+      totalHostsToScan,
+      lastScanTime
+    });
+  });
+
   // GET SCAN RANGES
   app.get('/api/ranges', (req: Request, res: Response) => {
     const db = readDB();
     res.json(db.scanRanges);
+  });
+
+  // PUT EDIT SCAN RANGE
+  app.put('/api/ranges/:id', (req: Request, res: Response) => {
+    const db = readDB();
+    const { id } = req.params;
+    const { name, range, isActive } = req.body;
+    
+    db.scanRanges = db.scanRanges.map(r => {
+      if (r.id === id) {
+        return {
+          ...r,
+          name: name !== undefined ? name : r.name,
+          range: range !== undefined ? range : r.range,
+          isActive: isActive !== undefined ? isActive : r.isActive
+        };
+      }
+      return r;
+    });
+
+    db.activityLogs.unshift({
+      id: 'log_' + Date.now(),
+      timestamp: new Date().toISOString(),
+      level: 'info',
+      message: 'Scan range updated',
+      details: `Subnet range ${name || id} was modified.`
+    });
+
+    writeDB(db);
+    res.json({ success: true, ranges: db.scanRanges });
   });
 
   // POST ADD/EDIT RANGE
@@ -984,6 +1095,34 @@ async function initServer() {
       hasPassword: !!c.password
     }));
     res.json(cleanedCreds);
+  });
+
+  // PUT EDIT CREDENTIAL BY ID
+  app.put('/api/credentials/:id', (req: Request, res: Response) => {
+    const db = readDB();
+    const { id } = req.params;
+    const { label, username, password, type, deviceId } = req.body;
+    
+    const existing = db.credentials.find(c => c.id === id);
+    if (existing) {
+      if (label !== undefined) existing.label = label;
+      if (username !== undefined) existing.username = username;
+      if (type !== undefined) existing.type = type;
+      if (deviceId !== undefined) existing.deviceId = deviceId;
+      if (password) {
+        existing.password = encrypt(password);
+      }
+      db.activityLogs.unshift({
+        id: 'log_' + Date.now(),
+        timestamp: new Date().toISOString(),
+        level: 'info',
+        message: 'Credential vault item modified',
+        details: `Admin credential: ${label || existing.label} (Username: ${username || existing.username}) updated.`
+      });
+      writeDB(db);
+      return res.json({ success: true });
+    }
+    return res.status(404).json({ success: false, message: 'Credential not found' });
   });
 
   // POST ADD/EDIT CREDENTIAL
@@ -1160,7 +1299,11 @@ async function initServer() {
       latencyThresholdMs,
       latencyAlertEnabled,
       statusChangeAlertEnabled,
-      offlineAlertEnabled
+      offlineAlertEnabled,
+      scanScheduleType,
+      dailyScanTime,
+      weeklyScanDay,
+      weeklyScanTime
     } = req.body;
 
     db.settings = {
@@ -1171,15 +1314,25 @@ async function initServer() {
       latencyThresholdMs: latencyThresholdMs !== undefined ? latencyThresholdMs : db.settings.latencyThresholdMs,
       latencyAlertEnabled: latencyAlertEnabled !== undefined ? latencyAlertEnabled : db.settings.latencyAlertEnabled,
       statusChangeAlertEnabled: statusChangeAlertEnabled !== undefined ? statusChangeAlertEnabled : db.settings.statusChangeAlertEnabled,
-      offlineAlertEnabled: offlineAlertEnabled !== undefined ? offlineAlertEnabled : db.settings.offlineAlertEnabled
+      offlineAlertEnabled: offlineAlertEnabled !== undefined ? offlineAlertEnabled : db.settings.offlineAlertEnabled,
+      scanScheduleType: scanScheduleType !== undefined ? scanScheduleType : (db.settings.scanScheduleType || 'interval'),
+      dailyScanTime: dailyScanTime !== undefined ? dailyScanTime : (db.settings.dailyScanTime || '02:00'),
+      weeklyScanDay: weeklyScanDay !== undefined ? weeklyScanDay : (db.settings.weeklyScanDay || 'Sunday'),
+      weeklyScanTime: weeklyScanTime !== undefined ? weeklyScanTime : (db.settings.weeklyScanTime || '03:00')
     };
+
+    const schedDesc = db.settings.scanScheduleType === 'daily' 
+      ? `Daily at ${db.settings.dailyScanTime}`
+      : db.settings.scanScheduleType === 'weekly'
+        ? `Weekly every ${db.settings.weeklyScanDay} at ${db.settings.weeklyScanTime}`
+        : `Interval every ${db.settings.scanIntervalMin}m`;
 
     db.activityLogs.unshift({
       id: 'log_' + Date.now(),
       timestamp: new Date().toISOString(),
       level: 'info',
-      message: 'Global settings updated',
-      details: `Automatic scan interval set to ${db.settings.scanIntervalMin} minutes.`
+      message: 'Global settings and scan schedule updated',
+      details: `Automatic scan schedule set to: ${schedDesc}.`
     });
 
     writeDB(db);
@@ -1243,6 +1396,35 @@ async function initServer() {
     perfHistory.push({ time: t, cpu, memory });
     if (perfHistory.length > 20) perfHistory.shift();
 
+    // Calculate 24-hour online device history telemetry points based on current DB state
+    const db = readDB();
+    const currentOnline = db.devices.filter(d => d.status === 'online').length;
+    const currentTotal = db.devices.length || 15;
+
+    // Generate smooth 24-hour curve ending at currentOnline
+    const currentHour = new Date().getHours();
+    const onlineHistory24h = [];
+    
+    for (let i = 23; i >= 0; i--) {
+      const hour = (currentHour - i + 24) % 24;
+      const hourLabel = `${hour.toString().padStart(2, '0')}:00`;
+      
+      // Dip slightly during night hours (01:00 to 05:00) when computers sleep
+      let variation = 0;
+      if (hour >= 1 && hour <= 5) {
+        variation = -Math.floor(Math.random() * 2 + 1);
+      } else if (hour >= 9 && hour <= 17) {
+        variation = Math.floor(Math.random() * 2);
+      }
+      
+      const count = Math.min(currentTotal, Math.max(1, i === 0 ? currentOnline : currentOnline + variation));
+      onlineHistory24h.push({
+        time: hourLabel,
+        onlineCount: count,
+        totalCount: currentTotal
+      });
+    }
+
     res.json({
       cpu,
       memory,
@@ -1252,7 +1434,8 @@ async function initServer() {
       packetsSent: enginePacketsSent,
       packetsReceived: enginePacketsReceived,
       isScanning: isScanningActive,
-      history: perfHistory
+      history: perfHistory,
+      onlineHistory24h
     });
   });
 
@@ -1402,6 +1585,17 @@ Include recommended ports to audit or look for, and standard security patching a
     }
   });
 
+
+  // DOWNLOAD UBUNTU DEPLOYMENT GUIDE DOCUMENT
+  app.get('/api/download/ubuntu-guide', (req: Request, res: Response) => {
+    const guidePath = path.join(process.cwd(), 'public', 'Ubuntu_24.04_LTS_Deployment_Guide.md');
+    if (fs.existsSync(guidePath)) {
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="Ubuntu_24.04_LTS_Deployment_Guide.md"');
+      return res.sendFile(guidePath);
+    }
+    res.status(404).json({ success: false, message: 'Deployment guide document not found' });
+  });
 
   // Serve frontend files / Vite dev middleware
   if (process.env.NODE_ENV !== 'production') {

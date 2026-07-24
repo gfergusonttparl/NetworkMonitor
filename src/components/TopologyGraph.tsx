@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Device, DeviceType, DeviceStatus } from '../types.js';
+import { Device, DeviceType, DeviceStatus, PingResult } from '../types.js';
 import { 
   Globe, 
   Shield, 
@@ -24,7 +24,8 @@ import {
   Laptop,
   Wifi,
   Radio,
-  Filter
+  Filter,
+  Search
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -71,6 +72,109 @@ export default function TopologyGraph({
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [contextMenu, setContextMenu] = useState<{
+    device: Device;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [isLegendOpen, setIsLegendOpen] = useState(true);
+
+  // Ping Diagnostic State
+  const [pingingDevice, setPingingDevice] = useState<Device | null>(null);
+  const [pingResult, setPingResult] = useState<PingResult | null>(null);
+  const [isPinging, setIsPinging] = useState(false);
+  const [showPingToast, setShowPingToast] = useState(false);
+
+  const handleRunPing = async (device: Device) => {
+    setIsPinging(true);
+    setPingingDevice(device);
+    setShowPingToast(true);
+    setPingResult(null);
+
+    try {
+      const res = await fetch(`/api/devices/${device.id}/ping`, { method: 'POST' });
+      if (res.ok) {
+        const data: PingResult = await res.json();
+        setPingResult(data);
+      } else {
+        console.error('Ping diagnostic request failed');
+      }
+    } catch (err) {
+      console.error('Ping execution error:', err);
+    } finally {
+      setIsPinging(false);
+    }
+  };
+
+  // Close context menu on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setContextMenu(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const handleContextMenu = (e: React.MouseEvent, device: Device) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+
+    const menuWidth = 210;
+    const menuHeight = 220;
+    let x = e.clientX - rect.left;
+    let y = e.clientY - rect.top;
+
+    if (x + menuWidth > rect.width) {
+      x = Math.max(10, rect.width - menuWidth - 10);
+    }
+    if (y + menuHeight > rect.height) {
+      y = Math.max(10, rect.height - menuHeight - 10);
+    }
+
+    setContextMenu({ device, x, y });
+  };
+
+  const trimmedSearch = searchQuery.trim().toLowerCase();
+  const isSearching = trimmedSearch.length > 0;
+
+  // Compute set of device IDs that match the search query
+  const matchingDeviceIds = React.useMemo(() => {
+    if (!isSearching) return new Set<string>();
+
+    return new Set(
+      devices
+        .filter(d => 
+          d.name.toLowerCase().includes(trimmedSearch) ||
+          d.ip.toLowerCase().includes(trimmedSearch) ||
+          (d.mac && d.mac.toLowerCase().includes(trimmedSearch)) ||
+          (d.vendor && d.vendor.toLowerCase().includes(trimmedSearch)) ||
+          (d.deviceType && d.deviceType.toLowerCase().includes(trimmedSearch))
+        )
+        .map(d => d.id)
+    );
+  }, [devices, trimmedSearch, isSearching]);
+
+  // Center canvas viewport on a specific node
+  const handleCenterOnNode = (deviceId: string) => {
+    const pos = positions[deviceId];
+    if (!pos || !containerRef.current) return;
+    const container = containerRef.current;
+    const rect = container.getBoundingClientRect();
+    const centerX = rect.width / 2 - pos.x * zoomScale;
+    const centerY = rect.height / 2 - pos.y * zoomScale;
+    setPanOffset({ x: centerX, y: centerY });
+
+    const dev = devices.find(d => d.id === deviceId);
+    if (dev) {
+      onSelectDevice(dev);
+    }
+  };
 
   // Inspector local editing state
   const [isEditing, setIsEditing] = useState(false);
@@ -86,55 +190,81 @@ export default function TopologyGraph({
     }
   }, [selectedDevice]);
 
-  // Calculate hierarchical positions whenever devices list changes
-  useEffect(() => {
-    if (!devices || devices.length === 0) return;
+  // Compute visible devices based on status filter (including preserving infrastructure nodes for rejected devices)
+  const visibleDeviceIds = React.useMemo(() => {
+    if (statusFilter === 'all') {
+      return new Set(devices.map(d => d.id));
+    }
 
-    // Separate core network layers
-    const modem = devices.find(d => d.deviceType === 'modem');
-    const firewall = devices.find(d => d.deviceType === 'firewall');
-    const routers = devices.filter(d => d.deviceType === 'router');
-    const switches = devices.filter(d => d.deviceType === 'switch');
+    if (statusFilter === 'rejected') {
+      const rejectedSet = new Set<string>();
+      const rejectedDevices = devices.filter(d => d.status === 'rejected');
+      
+      // Add all rejected devices
+      rejectedDevices.forEach(d => rejectedSet.add(d.id));
+
+      // Trace parent chains up to modem/router to preserve connected switch/AP topology context
+      rejectedDevices.forEach(dev => {
+        let currentParentId = dev.parentId;
+        while (currentParentId) {
+          rejectedSet.add(currentParentId);
+          const parentDev = devices.find(d => d.id === currentParentId);
+          currentParentId = parentDev ? parentDev.parentId : null;
+        }
+      });
+
+      // Always include core infrastructure devices (Ethernet network switches, APs, routers, modems, firewalls)
+      const infrastructureTypes: DeviceType[] = ['modem', 'firewall', 'router', 'switch', 'ap', 'extender'];
+      devices.forEach(d => {
+        if (infrastructureTypes.includes(d.deviceType)) {
+          rejectedSet.add(d.id);
+        }
+      });
+
+      return rejectedSet;
+    }
+
+    return new Set(devices.filter(d => d.status === statusFilter).map(d => d.id));
+  }, [devices, statusFilter]);
+
+  // Helper function to calculate spacious, non-overlapping hierarchical positions
+  const computeSpaciousLayout = (deviceList: Device[]) => {
+    if (!deviceList || deviceList.length === 0) return {};
+
+    const modem = deviceList.find(d => d.deviceType === 'modem');
+    const firewall = deviceList.find(d => d.deviceType === 'firewall');
+    const routers = deviceList.filter(d => d.deviceType === 'router');
+    const switches = deviceList.filter(d => d.deviceType === 'switch');
 
     const newPositions: Record<string, NodePosition> = {};
-    const width = 1000;
-    const height = 550;
+    const width = 1200; // Spacious 1200px width
 
-    // Helper: assign position
     const assign = (id: string, x: number, y: number, level: number) => {
       newPositions[id] = { id, x, y, originalX: x, originalY: y, level };
     };
 
     // Level 0: Modem at top-center
-    let currentY = 45;
-    if (modem) {
-      assign(modem.id, width / 2, currentY, 0);
-    }
+    if (modem) assign(modem.id, width / 2, 50, 0);
 
-    // Level 1: Firewalls and Router beneath Modem
-    currentY += 80;
+    // Level 1: Firewalls & Routers
     const l1Devices = [...routers];
     if (firewall) l1Devices.unshift(firewall);
-
+    const l1Gap = Math.max(240, width / (l1Devices.length + 1));
     l1Devices.forEach((d, idx) => {
-      const x = l1Devices.length === 1 
-        ? width / 2 
-        : (width / (l1Devices.length + 1)) * (idx + 1);
-      assign(d.id, x, currentY, 1);
+      const x = l1Devices.length === 1 ? width / 2 : l1Gap * (idx + 1);
+      assign(d.id, x, 145, 1);
     });
 
-    // Level 2: Core Switches
-    currentY += 85;
+    // Level 2: Ethernet Switches
+    const swGap = Math.max(260, width / (switches.length + 1));
     switches.forEach((sw, idx) => {
-      const x = switches.length === 1 
-        ? width / 2 
-        : (width / (switches.length + 1)) * (idx + 1);
-      assign(sw.id, x, currentY, 2);
+      const x = switches.length === 1 ? width / 2 : swGap * (idx + 1);
+      assign(sw.id, x, 245, 2);
     });
 
-    // We will place children recursively level by level to support deep topologies (switches -> APs -> Extenders -> Endpoints)
+    // Recursive placement of leaf nodes & endpoints with ample clearance for full device names
     const placeChildrenOf = (parentId: string, currentLevel: number, startY: number) => {
-      const children = devices.filter(d => d.parentId === parentId && !newPositions[d.id]);
+      const children = deviceList.filter(d => d.parentId === parentId && !newPositions[d.id]);
       if (children.length === 0) return;
 
       const parentPos = newPositions[parentId];
@@ -142,46 +272,80 @@ export default function TopologyGraph({
 
       const parentX = parentPos.x;
       const totalChildren = children.length;
-      
-      // Calculate vertical Y step
-      const y = startY + 85;
-      
-      // Calculate dynamic span based on level and children count
-      const span = Math.min(320, totalChildren * 75);
-      const startX = parentX - span / 2;
+
+      // Minimum horizontal distance between node centers to fit full device names without label collision (210px)
+      const NODE_CENTER_GAP = 210;
+      const totalSpan = (totalChildren - 1) * NODE_CENTER_GAP;
+      const startX = parentX - totalSpan / 2;
 
       children.forEach((child, idx) => {
-        const x = totalChildren === 1 
-          ? parentX 
-          : startX + (span / (totalChildren - 1)) * idx;
+        const x = totalChildren === 1 ? parentX : startX + idx * NODE_CENTER_GAP;
+        // Stagger Y position slightly if there are many sibling nodes to prevent side-by-side or label crowding
+        const staggerY = totalChildren > 3 ? (idx % 2 === 0 ? 0 : 55) : 0;
+        const y = startY + 115 + staggerY;
+
         assign(child.id, x, y, currentLevel);
-        
-        // Recursively place this child's children
         placeChildrenOf(child.id, currentLevel + 1, y);
       });
     };
 
-    // Begin placing recursively under switches
-    switches.forEach(sw => {
-      placeChildrenOf(sw.id, 3, 210);
-    });
+    switches.forEach(sw => placeChildrenOf(sw.id, 3, 245));
+    routers.forEach(r => placeChildrenOf(r.id, 2, 145));
+    if (firewall) placeChildrenOf(firewall.id, 2, 145);
 
-    // Also place children under routers/firewalls if any
-    routers.forEach(r => {
-      placeChildrenOf(r.id, 2, 125);
-    });
-    if (firewall) {
-      placeChildrenOf(firewall.id, 2, 125);
+    // Any unparented devices
+    const unassigned = deviceList.filter(d => !newPositions[d.id]);
+    if (unassigned.length > 0) {
+      const unGap = Math.max(210, width / (unassigned.length + 1));
+      unassigned.forEach((d, idx) => {
+        assign(d.id, unGap * (idx + 1), 520, 4);
+      });
     }
 
-    // Any remaining orphans
-    devices.forEach(d => {
-      if (!newPositions[d.id]) {
-        const x = width / 2;
-        const y = 480;
-        assign(d.id, x, y, 4);
+    // MULTI-PASS COLLISION RESOLUTION to guarantee zero overlap of device labels
+    const posArray = Object.values(newPositions);
+    for (let pass = 0; pass < 3; pass++) {
+      for (let i = 0; i < posArray.length; i++) {
+        for (let j = i + 1; j < posArray.length; j++) {
+          const n1 = posArray[i];
+          const n2 = posArray[j];
+
+          // Check nodes on similar vertical bands
+          if (Math.abs(n1.y - n2.y) < 55) {
+            const dx = n2.x - n1.x;
+            const minDist = 200; // minimum gap
+            if (Math.abs(dx) < minDist) {
+              const overlap = minDist - Math.abs(dx);
+              const shift = overlap / 2 + 5;
+              if (dx >= 0) {
+                n1.x -= shift;
+                n2.x += shift;
+              } else {
+                n1.x += shift;
+                n2.x -= shift;
+              }
+            }
+          }
+        }
       }
-    });
+    }
+
+    return newPositions;
+  };
+
+  // Explicit Auto-Arrange positioning layout function
+  const handleAutoArrange = () => {
+    if (!devices || devices.length === 0) return;
+    const computed = computeSpaciousLayout(devices);
+    setPositions(computed);
+    setZoomScale(1);
+    setPanOffset({ x: 0, y: 0 });
+  };
+
+  // Calculate hierarchical positions whenever devices list changes
+  useEffect(() => {
+    if (!devices || devices.length === 0) return;
+    const newPositions = computeSpaciousLayout(devices);
 
     // Merge or maintain custom dragged offsets if positions already exist
     setPositions(prev => {
@@ -194,7 +358,6 @@ export default function TopologyGraph({
       });
       return merged;
     });
-
   }, [devices]);
 
   // Handle Dragging
@@ -653,14 +816,73 @@ export default function TopologyGraph({
   });
 
   return (
-    <div 
-      id="topology_canvas_container"
-      ref={containerRef}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseDown={startPan}
-      className="relative w-full h-[600px] border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950/70 rounded-xl overflow-hidden cursor-grab active:cursor-grabbing select-none"
-    >
+    <div id="topology_graph_wrapper">
+      {/* TOPOLOGY SEARCH & HIGHLIGHT BAR ABOVE GRAPH */}
+      <div id="topology_graph_search_bar" className="mb-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-2.5 rounded-xl shadow-xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        {/* Search Input Field */}
+        <div className="relative flex-1">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-zinc-400">
+            <Search className="w-4 h-4" />
+          </div>
+          <input
+            id="input_topology_graph_search"
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search topology nodes by IP address or device name (e.g. 192.168.1.1, Switch, NAS, Printer)..."
+            className="w-full pl-9 pr-24 py-2 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-xs font-mono text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition"
+          />
+          {searchQuery && (
+            <div className="absolute inset-y-0 right-2 flex items-center gap-1.5">
+              <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 rounded-md text-[10px] font-bold font-mono">
+                {matchingDeviceIds.size} match{matchingDeviceIds.size === 1 ? '' : 'es'}
+              </span>
+              <button
+                id="btn_clear_topology_search"
+                onClick={() => setSearchQuery('')}
+                className="p-1 hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-md transition cursor-pointer"
+                title="Clear search filter"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Quick Focus Chips when searching */}
+        {isSearching && matchingDeviceIds.size > 0 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto max-w-full py-0.5">
+            <span className="text-[10.5px] font-medium text-zinc-400 whitespace-nowrap">Focus:</span>
+            {devices.filter(d => matchingDeviceIds.has(d.id)).slice(0, 4).map(dev => (
+              <button
+                key={dev.id}
+                id={`btn_focus_node_${dev.id}`}
+                onClick={() => handleCenterOnNode(dev.id)}
+                className="px-2.5 py-1 bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800/80 rounded-md text-[11px] font-mono font-semibold text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900 transition flex items-center gap-1 whitespace-nowrap cursor-pointer shadow-xs"
+              >
+                <span>{dev.name}</span>
+                <span className="text-[9.5px] text-blue-400/80 font-normal">({dev.ip})</span>
+              </button>
+            ))}
+            {matchingDeviceIds.size > 4 && (
+              <span className="text-[10px] text-zinc-400 font-mono">+{matchingDeviceIds.size - 4} more</span>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div 
+        id="topology_canvas_container"
+        ref={containerRef}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseDown={(e) => {
+          setContextMenu(null);
+          startPan(e);
+        }}
+        onClick={() => setContextMenu(null)}
+        className="relative w-full h-[600px] border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950/70 rounded-xl overflow-hidden cursor-grab active:cursor-grabbing select-none"
+      >
       {/* Zoom / Pan Controls */}
       <div id="canvas_overlay_controls" className="absolute top-4 left-4 z-10 flex gap-2">
         <button
@@ -690,22 +912,34 @@ export default function TopologyGraph({
         </div>
       </div>
 
-      {/* L2 Status Filter - Top Right */}
-      <div id="canvas_status_filter" className="absolute top-4 right-4 z-10 flex items-center gap-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-zinc-600 dark:text-zinc-400 shadow-sm">
-        <Filter className="w-3.5 h-3.5" />
-        <span>Status:</span>
-        <select
-          id="select_graph_status_filter"
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="bg-transparent border-none text-zinc-900 dark:text-zinc-100 font-semibold focus:outline-none focus:ring-0 ml-1 cursor-pointer text-xs"
+      {/* L2 Controls & Auto-Arrange - Top Right */}
+      <div id="canvas_status_filter" className="absolute top-4 right-4 z-10 flex items-center gap-2">
+        <button
+          id="btn_auto_arrange_topology"
+          onClick={handleAutoArrange}
+          className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white font-medium px-3 py-1.5 rounded-lg text-xs shadow-sm transition cursor-pointer"
+          title="Auto-arrange layout of all discovered devices"
         >
-          <option value="all">All Statuses</option>
-          <option value="online">Online</option>
-          <option value="sleep">Sleep Mode</option>
-          <option value="offline">Offline</option>
-          <option value="rejected">Rejected</option>
-        </select>
+          <Sparkles className="w-3.5 h-3.5" />
+          <span>Auto-Arrange</span>
+        </button>
+
+        <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 px-3 py-1.5 rounded-lg text-xs text-zinc-600 dark:text-zinc-400 shadow-sm">
+          <Filter className="w-3.5 h-3.5" />
+          <span>Status:</span>
+          <select
+            id="select_graph_status_filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="bg-transparent border-none text-zinc-900 dark:text-zinc-100 font-semibold focus:outline-none focus:ring-0 ml-1 cursor-pointer text-xs"
+          >
+            <option value="all">All Statuses</option>
+            <option value="online">Online</option>
+            <option value="sleep">Sleep Mode</option>
+            <option value="offline">Offline</option>
+            <option value="rejected">Rejected</option>
+          </select>
+        </div>
       </div>
 
       <div id="canvas_legend" className="absolute bottom-4 left-4 z-10 flex flex-wrap gap-x-4 gap-y-2 bg-white/90 dark:bg-zinc-900/90 backdrop-blur border border-zinc-200 dark:border-zinc-800 p-3 rounded-lg text-xs shadow-sm">
@@ -767,11 +1001,11 @@ export default function TopologyGraph({
         {/* CONNECTION CABLES / LINKS */}
         <g id="topology_links_group">
           {links.map((link, idx) => {
-            // Check visibility based on source and target status
+            // Check visibility based on visibleDeviceIds set (preserves connected infrastructure for rejected devices)
             const sourceDev = devices.find(d => d.id === link.sourceId);
             const targetDev = devices.find(d => d.id === link.targetId);
-            const sourceVisible = !sourceDev || statusFilter === 'all' || sourceDev.status === statusFilter;
-            const targetVisible = !targetDev || statusFilter === 'all' || targetDev.status === statusFilter;
+            const sourceVisible = !sourceDev || visibleDeviceIds.has(sourceDev.id);
+            const targetVisible = !targetDev || visibleDeviceIds.has(targetDev.id);
             if (!sourceVisible || !targetVisible) {
               return null;
             }
@@ -784,8 +1018,14 @@ export default function TopologyGraph({
                 ? 'url(#linkGradientSleep)' 
                 : 'url(#linkGradientOffline)';
             
+            const isConnectedToMatch = isSearching && (
+              (sourceDev && matchingDeviceIds.has(sourceDev.id)) ||
+              (targetDev && matchingDeviceIds.has(targetDev.id))
+            );
+            const linkOpacity = isSearching ? (isConnectedToMatch ? 0.95 : 0.15) : 0.6;
+
             return (
-              <g key={`link-${idx}`}>
+              <g key={`link-${idx}`} style={{ opacity: linkOpacity, transition: 'opacity 0.2s ease' }}>
                 {/* Visual Connection Cable */}
                 <line
                   x1={link.source.x}
@@ -819,8 +1059,8 @@ export default function TopologyGraph({
             const pos = positions[device.id];
             if (!pos) return null;
 
-            // Filter out nodes based on Status filter selection
-            if (statusFilter !== 'all' && device.status !== statusFilter) {
+            // Filter out nodes based on computed visibleDeviceIds set
+            if (!visibleDeviceIds.has(device.id)) {
               return null;
             }
 
@@ -833,6 +1073,8 @@ export default function TopologyGraph({
             const isSelected = selectedDevice?.id === device.id;
             const isSwitch = device.deviceType === 'switch';
             const isCollapsed = collapsedSwitches[device.id];
+            const isMatch = isSearching && matchingDeviceIds.has(device.id);
+            const nodeOpacity = isSearching ? (isMatch ? 1 : 0.22) : 1;
 
             // Count endpoints connected to this switch
             const connectedEndpointsCount = devices.filter(d => d.parentId === device.id && d.deviceType !== 'switch').length;
@@ -843,13 +1085,61 @@ export default function TopologyGraph({
                 id={`node-${device.id}`}
                 transform={`translate(${pos.x}, ${pos.y})`}
                 onMouseDown={(e) => handleMouseDown(e, device.id)}
-                onClick={() => onSelectDevice(device)}
+                onClick={() => {
+                  setContextMenu(null);
+                  onSelectDevice(device);
+                }}
+                onContextMenu={(e) => handleContextMenu(e, device)}
                 onMouseEnter={() => setHoveredNode(device)}
                 onMouseLeave={() => setHoveredNode(null)}
+                style={{ opacity: nodeOpacity, transition: 'opacity 0.2s ease' }}
                 className="cursor-grab active:cursor-grabbing group"
               >
+                {/* Search Match Glowing Pulsing Highlight Ring */}
+                {isMatch && (
+                  <g id={`match-highlight-${device.id}`}>
+                    <circle
+                      r="42"
+                      fill="rgba(59, 130, 246, 0.2)"
+                      stroke="#3b82f6"
+                      strokeWidth="2.5"
+                      className="animate-pulse"
+                    />
+                    <circle
+                      r="48"
+                      fill="none"
+                      stroke="#60a5fa"
+                      strokeWidth="1.5"
+                      strokeDasharray="4 3"
+                      className="animate-spin"
+                      style={{ animationDuration: '6s' }}
+                    />
+                    <g transform="translate(0, -46)">
+                      <rect
+                        x="-24"
+                        y="-9"
+                        width="48"
+                        height="15"
+                        rx="4"
+                        fill="#3b82f6"
+                        className="shadow-sm"
+                      />
+                      <text
+                        textAnchor="middle"
+                        dy="2"
+                        fontSize="8.5"
+                        fontWeight="bold"
+                        fill="#ffffff"
+                        className="font-sans uppercase tracking-wider"
+                      >
+                        MATCH
+                      </text>
+                    </g>
+                  </g>
+                )}
+
                 {/* Flashing Ring Highlight for New Devices */}
-                {device.isNew && (
+                {device.isNew && !isMatch && (
                   <circle
                     r="40"
                     fill="none"
@@ -889,7 +1179,7 @@ export default function TopologyGraph({
                   fontSize="11"
                   fontWeight="600"
                   fill="currentColor"
-                  className="text-zinc-800 dark:text-zinc-200 pointer-events-none drop-shadow-sm font-sans"
+                  className={isMatch ? "text-blue-600 dark:text-blue-400 font-bold pointer-events-none drop-shadow-sm font-sans" : "text-zinc-800 dark:text-zinc-200 pointer-events-none drop-shadow-sm font-sans"}
                 >
                   {device.name}
                 </text>
@@ -900,7 +1190,7 @@ export default function TopologyGraph({
                   y="56"
                   fontSize="9.5"
                   fill="currentColor"
-                  className="text-zinc-500 dark:text-zinc-400 font-mono pointer-events-none"
+                  className={isMatch ? "text-blue-600 dark:text-blue-400 font-bold font-mono pointer-events-none" : "text-zinc-500 dark:text-zinc-400 font-mono pointer-events-none"}
                 >
                   {device.ip}
                 </text>
@@ -993,6 +1283,221 @@ export default function TopologyGraph({
                   </span>
                 </div>
               )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* FLOATING LEGEND COMPONENT */}
+      <div
+        id="topology_floating_legend"
+        className="absolute bottom-4 left-4 z-20 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-lg transition-all duration-200 max-w-[280px]"
+      >
+        <div className="flex items-center justify-between p-2.5 px-3 border-b border-zinc-100 dark:border-zinc-800/60">
+          <div className="flex items-center gap-1.5 font-bold text-xs text-zinc-900 dark:text-zinc-100">
+            <Info className="w-3.5 h-3.5 text-blue-500" />
+            <span>Topology Legend</span>
+          </div>
+          <button
+            id="btn_toggle_topology_legend"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsLegendOpen(!isLegendOpen);
+            }}
+            className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-md transition cursor-pointer"
+            title={isLegendOpen ? "Collapse legend" : "Expand legend"}
+          >
+            {isLegendOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+
+        <AnimatePresence>
+          {isLegendOpen && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="p-3 pt-2 text-[11px] space-y-2.5 overflow-hidden"
+            >
+              {/* Device Statuses */}
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5">
+                  Device Statuses
+                </div>
+                <div className="grid grid-cols-2 gap-1.5 font-medium">
+                  <div className="flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0 shadow-xs" />
+                    <span>Online</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0 shadow-xs" />
+                    <span>Sleep Mode</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-500 shrink-0 shadow-xs" />
+                    <span>Offline</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300">
+                    <span className="w-2.5 h-2.5 rounded-full bg-zinc-400 shrink-0 shadow-xs" />
+                    <span>Rejected</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Link Types */}
+              <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800/60">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5">
+                  Link Connections
+                </div>
+                <div className="space-y-1 text-zinc-600 dark:text-zinc-400 font-medium">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-1 rounded-full bg-gradient-to-r from-emerald-500 to-blue-500 shrink-0" />
+                    <span>Active Uplink Cable</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-1 rounded-full bg-amber-500/80 shrink-0" />
+                    <span>Standby / Sleep Link</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-1 rounded-full bg-rose-500/80 shrink-0" />
+                    <span>Disconnected Link</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick tip */}
+              <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800/60 text-[10px] text-zinc-400 italic">
+                💡 Right-click any node for Quick AI Analysis, Accept, or Reject!
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* RIGHT-CLICK CONTEXT MENU POPOVER */}
+      <AnimatePresence>
+        {contextMenu && (
+          <motion.div
+            id="node_context_menu_popover"
+            initial={{ opacity: 0, scale: 0.92, y: -4 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            transition={{ duration: 0.12 }}
+            style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+            onClick={(e) => e.stopPropagation()}
+            className="absolute z-50 w-52 bg-white/95 dark:bg-zinc-900/95 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-1.5 backdrop-blur-md"
+          >
+            {/* Header */}
+            <div className="px-2.5 py-2 border-b border-zinc-100 dark:border-zinc-800/80 mb-1 flex items-center justify-between">
+              <div className="truncate pr-1">
+                <div className="font-bold text-xs text-zinc-900 dark:text-zinc-100 truncate">
+                  {contextMenu.device.name}
+                </div>
+                <div className="font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
+                  {contextMenu.device.ip}
+                </div>
+              </div>
+              <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                contextMenu.device.status === 'online' ? 'bg-emerald-500' :
+                contextMenu.device.status === 'sleep' ? 'bg-amber-500' :
+                contextMenu.device.status === 'offline' ? 'bg-rose-500' : 'bg-zinc-400'
+              }`} />
+            </div>
+
+            {/* Menu options */}
+            <div className="space-y-0.5 text-xs">
+              {/* Ping Diagnostic */}
+              <button
+                id="ctx_btn_ping_device"
+                onClick={() => {
+                  const dev = contextMenu.device;
+                  setContextMenu(null);
+                  handleRunPing(dev);
+                }}
+                className="w-full text-left px-2.5 py-1.5 text-blue-600 dark:text-blue-400 font-semibold hover:bg-blue-50 dark:hover:bg-blue-950/60 rounded-lg flex items-center gap-2 transition cursor-pointer"
+              >
+                <Radio className="w-3.5 h-3.5 text-blue-500 animate-pulse" />
+                <span>Ping Device (5 Packets)</span>
+              </button>
+
+              {/* Analyze with AI */}
+              {onAnalyzeDevice && (
+                <button
+                  id="ctx_btn_analyze_ai"
+                  onClick={() => {
+                    const dev = contextMenu.device;
+                    setContextMenu(null);
+                    onSelectDevice(dev);
+                    onAnalyzeDevice(dev);
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 text-indigo-600 dark:text-indigo-400 font-semibold hover:bg-indigo-50 dark:hover:bg-indigo-950/60 rounded-lg flex items-center gap-2 transition cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-indigo-500 animate-pulse" />
+                  <span>Analyze with AI</span>
+                </button>
+              )}
+
+              {/* Accept Device */}
+              {onAcceptDevice && (
+                <button
+                  id="ctx_btn_accept_device"
+                  onClick={async () => {
+                    const devId = contextMenu.device.id;
+                    setContextMenu(null);
+                    await onAcceptDevice(devId);
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 text-emerald-600 dark:text-emerald-400 font-semibold hover:bg-emerald-50 dark:hover:bg-emerald-950/60 rounded-lg flex items-center gap-2 transition cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>Accept Device</span>
+                </button>
+              )}
+
+              {/* Reject / Blacklist Device */}
+              {onRejectDevice && (
+                <button
+                  id="ctx_btn_reject_device"
+                  onClick={async () => {
+                    const devId = contextMenu.device.id;
+                    setContextMenu(null);
+                    await onRejectDevice(devId);
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 text-rose-600 dark:text-rose-400 font-semibold hover:bg-rose-50 dark:hover:bg-rose-950/60 rounded-lg flex items-center gap-2 transition cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5 text-rose-500" />
+                  <span>Reject / Blacklist</span>
+                </button>
+              )}
+
+              <div className="my-1 border-t border-zinc-100 dark:border-zinc-800" />
+
+              {/* View Details / Inspect */}
+              <button
+                id="ctx_btn_view_details"
+                onClick={() => {
+                  const dev = contextMenu.device;
+                  setContextMenu(null);
+                  onSelectDevice(dev);
+                }}
+                className="w-full text-left px-2.5 py-1.5 text-zinc-700 dark:text-zinc-300 font-medium hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg flex items-center gap-2 transition cursor-pointer"
+              >
+                <Eye className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Inspect Node</span>
+              </button>
+
+              {/* Focus / Center in view */}
+              <button
+                id="ctx_btn_center_node"
+                onClick={() => {
+                  const devId = contextMenu.device.id;
+                  setContextMenu(null);
+                  handleCenterOnNode(devId);
+                }}
+                className="w-full text-left px-2.5 py-1.5 text-zinc-700 dark:text-zinc-300 font-medium hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg flex items-center gap-2 transition cursor-pointer"
+              >
+                <Maximize2 className="w-3.5 h-3.5 text-zinc-400" />
+                <span>Center Viewport</span>
+              </button>
             </div>
           </motion.div>
         )}
@@ -1181,6 +1686,19 @@ export default function TopologyGraph({
                 </div>
               )}
 
+              {/* ICMP PING DIAGNOSTIC BUTTON */}
+              <div className="pt-3 border-t border-zinc-200 dark:border-zinc-800">
+                <button
+                  id="btn_inspector_ping"
+                  onClick={() => handleRunPing(selectedDevice)}
+                  disabled={isPinging}
+                  className="w-full py-2 px-3 bg-zinc-800 dark:bg-zinc-800 hover:bg-zinc-900 dark:hover:bg-zinc-700 text-white rounded-lg font-semibold flex items-center justify-center gap-1.5 shadow transition text-xs cursor-pointer"
+                >
+                  <Radio className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
+                  <span>{isPinging ? 'Pinging Node...' : 'Run 5-Packet Ping Diagnostic'}</span>
+                </button>
+              </div>
+
               {/* AI RISK SECURITY AGENT MODULE */}
               {onAnalyzeDevice && (
                 <div className="pt-3 border-t border-zinc-200 dark:border-zinc-800 mt-4">
@@ -1214,6 +1732,83 @@ export default function TopologyGraph({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* ICMP PING DIAGNOSTIC RESULT TOAST NOTIFICATION POPOVER */}
+      <AnimatePresence>
+        {showPingToast && pingingDevice && (
+          <motion.div
+            id="ping_diagnostic_toast"
+            initial={{ opacity: 0, y: 30, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className="fixed bottom-6 right-6 z-50 w-96 bg-white/95 dark:bg-zinc-900/95 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl overflow-hidden p-4 backdrop-blur-md"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 rounded-lg">
+                  <Radio className="w-4 h-4 animate-pulse" />
+                </span>
+                <div>
+                  <h4 className="font-bold text-xs text-zinc-900 dark:text-zinc-100">ICMP Ping Diagnostic Test</h4>
+                  <p className="text-[11px] font-mono text-zinc-500">{pingingDevice.name} ({pingingDevice.ip})</p>
+                </div>
+              </div>
+              <button
+                id="btn_close_ping_toast"
+                onClick={() => setShowPingToast(false)}
+                className="p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-md transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {isPinging ? (
+              <div className="py-6 flex flex-col items-center justify-center space-y-2">
+                <RefreshCw className="w-6 h-6 text-blue-500 animate-spin" />
+                <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">Transmitting 5 ICMP echo request packets...</p>
+                <p className="text-[10px] text-zinc-400">Measuring round-trip time & packet jitter</p>
+              </div>
+            ) : pingResult ? (
+              <div className="pt-3 space-y-3">
+                {/* Summary stats */}
+                <div className="grid grid-cols-3 gap-2 text-center text-[11px]">
+                  <div className="bg-zinc-50 dark:bg-zinc-950 p-2 rounded-lg border border-zinc-100 dark:border-zinc-800">
+                    <span className="text-zinc-400 block text-[9px] uppercase font-bold">Received</span>
+                    <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">{pingResult.received} / {pingResult.transmitted}</span>
+                  </div>
+                  <div className="bg-zinc-50 dark:bg-zinc-950 p-2 rounded-lg border border-zinc-100 dark:border-zinc-800">
+                    <span className="text-zinc-400 block text-[9px] uppercase font-bold">Packet Loss</span>
+                    <span className={`font-mono font-bold ${pingResult.lossPercent > 0 ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                      {pingResult.lossPercent}%
+                    </span>
+                  </div>
+                  <div className="bg-zinc-50 dark:bg-zinc-950 p-2 rounded-lg border border-zinc-100 dark:border-zinc-800">
+                    <span className="text-zinc-400 block text-[9px] uppercase font-bold">Avg Latency</span>
+                    <span className="font-mono font-bold text-blue-600 dark:text-blue-400">{pingResult.avgMs} ms</span>
+                  </div>
+                </div>
+
+                {/* Packet log details */}
+                <div className="bg-zinc-950 text-emerald-400 p-2.5 rounded-xl font-mono text-[10.5px] space-y-1 max-h-36 overflow-y-auto shadow-inner border border-zinc-800">
+                  {pingResult.packets.map((pkt) => (
+                    <div key={pkt.seq} className="flex justify-between items-center">
+                      <span>64 bytes from {pingResult.device.ip}: icmp_seq={pkt.seq} ttl={pkt.ttl}</span>
+                      <span className={pkt.status === 'reply' ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                        {pkt.status === 'reply' ? `${pkt.rttMs} ms` : 'Request Timeout'}
+                      </span>
+                    </div>
+                  ))}
+                  <div className="pt-1.5 border-t border-zinc-800 text-[9.5px] text-zinc-400 flex justify-between font-mono">
+                    <span>rtt min/avg/max = {pingResult.minMs}/{pingResult.avgMs}/{pingResult.maxMs} ms</span>
+                    <span className="text-emerald-500 font-bold">Done</span>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
-  );
+  </div>
+);
 }

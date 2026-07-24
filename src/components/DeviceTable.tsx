@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Device, DeviceType, DeviceStatus, Credential } from '../types.js';
+import { Device, DeviceType, DeviceStatus, Credential, PingResult } from '../types.js';
 import { 
   Search, 
   Filter, 
@@ -74,11 +74,47 @@ export default function DeviceTable({
   const [sortField, setSortField] = useState<keyof Device>('ip');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
+  // Data grid pagination state
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+
+  // Reset page when filters change
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter, typeFilter, pageSize]);
+
   // Row selection state
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   // Row ellipsis action menu state
   const [activeMenuDeviceId, setActiveMenuDeviceId] = useState<string | null>(null);
+
+  // Ping Diagnostic State
+  const [pingingDevice, setPingingDevice] = useState<Device | null>(null);
+  const [pingResult, setPingResult] = useState<PingResult | null>(null);
+  const [isPinging, setIsPinging] = useState(false);
+  const [showPingToast, setShowPingToast] = useState(false);
+
+  const handleRunPing = async (device: Device) => {
+    setIsPinging(true);
+    setPingingDevice(device);
+    setShowPingToast(true);
+    setPingResult(null);
+
+    try {
+      const res = await fetch(`/api/devices/${device.id}/ping`, { method: 'POST' });
+      if (res.ok) {
+        const data: PingResult = await res.json();
+        setPingResult(data);
+      } else {
+        console.error('Ping request failed');
+      }
+    } catch (err) {
+      console.error('Ping error:', err);
+    } finally {
+      setIsPinging(false);
+    }
+  };
 
   // Bulk categorization chosen type
   const [bulkCategoryChosen, setBulkCategoryChosen] = useState<DeviceType>('computer');
@@ -264,6 +300,13 @@ export default function DeviceTable({
       setSelectedIds([]);
     }
   };
+
+  // Data grid pagination calculations
+  const totalItems = sortedDevices.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const startIndex = (safeCurrentPage - 1) * pageSize;
+  const paginatedDevices = sortedDevices.slice(startIndex, startIndex + pageSize);
 
   // Calculate subnet representation visual bars
   const totalSubnet1Nodes = devices.filter(d => d.ip.startsWith('192.168.1.')).length;
@@ -597,14 +640,14 @@ export default function DeviceTable({
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800 text-xs text-zinc-700 dark:text-zinc-300">
-              {sortedDevices.length === 0 ? (
+              {paginatedDevices.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="p-8 text-center text-zinc-400 font-sans italic">
                     No matching devices found on this active subnet sweep.
                   </td>
                 </tr>
               ) : (
-                sortedDevices.map((device) => {
+                paginatedDevices.map((device) => {
                   const isEditing = editingDeviceId === device.id;
                   const isSelected = selectedIds.includes(device.id);
                   
@@ -923,6 +966,62 @@ export default function DeviceTable({
             </tbody>
           </table>
         </div>
+
+        {/* Data Grid Pagination Bar & Page Size Selector */}
+        <div id="data_grid_pagination_bar" className="px-6 py-3 bg-zinc-50 dark:bg-zinc-800/40 border-t border-zinc-200 dark:border-zinc-800 flex flex-col sm:flex-row justify-between items-center gap-3 text-xs">
+          {/* Page Size Selector Buttons */}
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500 font-medium">Show per page:</span>
+            <div className="flex items-center gap-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg p-0.5 shadow-xs">
+              {[25, 50, 75, 100].map(size => (
+                <button
+                  key={size}
+                  id={`btn_pagesize_${size}`}
+                  onClick={() => {
+                    setPageSize(size);
+                    setCurrentPage(1);
+                  }}
+                  className={`px-2.5 py-1 rounded-md font-bold transition cursor-pointer ${
+                    pageSize === size
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                  }`}
+                >
+                  {size}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Page Info and Prev/Next Navigation */}
+          <div className="flex items-center gap-4 text-zinc-600 dark:text-zinc-400">
+            <span>
+              Showing <strong className="text-zinc-900 dark:text-zinc-100">{totalItems > 0 ? startIndex + 1 : 0}</strong>–<strong className="text-zinc-900 dark:text-zinc-100">{Math.min(startIndex + pageSize, totalItems)}</strong> of <strong className="text-zinc-900 dark:text-zinc-100">{totalItems}</strong> devices
+            </span>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                id="btn_prev_page"
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                disabled={safeCurrentPage <= 1}
+                className="px-2.5 py-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg font-semibold hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
+              >
+                Previous
+              </button>
+              <span className="px-2 font-mono font-bold text-zinc-900 dark:text-zinc-200">
+                {safeCurrentPage} / {totalPages}
+              </span>
+              <button
+                id="btn_next_page"
+                onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                disabled={safeCurrentPage >= totalPages}
+                className="px-2.5 py-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg font-semibold hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Editing Area for Notes & Details */}
@@ -983,6 +1082,82 @@ export default function DeviceTable({
                 </div>
               </div>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ICMP PING DIAGNOSTIC RESULT TOAST NOTIFICATION POPOVER */}
+      <AnimatePresence>
+        {showPingToast && pingingDevice && (
+          <motion.div
+            id="table_ping_diagnostic_toast"
+            initial={{ opacity: 0, y: 30, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className="fixed bottom-6 right-6 z-50 w-96 bg-white/95 dark:bg-zinc-900/95 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl overflow-hidden p-4 backdrop-blur-md text-left"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-100 dark:border-zinc-800">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 rounded-lg">
+                  <Radio className="w-4 h-4 animate-pulse" />
+                </span>
+                <div>
+                  <h4 className="font-bold text-xs text-zinc-900 dark:text-zinc-100">ICMP Ping Diagnostic Test</h4>
+                  <p className="text-[11px] font-mono text-zinc-500">{pingingDevice.name} ({pingingDevice.ip})</p>
+                </div>
+              </div>
+              <button
+                id="btn_close_table_ping_toast"
+                onClick={() => setShowPingToast(false)}
+                className="p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-md transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {isPinging ? (
+              <div className="py-6 flex flex-col items-center justify-center space-y-2">
+                <RefreshCw className="w-6 h-6 text-blue-500 animate-spin" />
+                <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">Transmitting 5 ICMP echo request packets...</p>
+                <p className="text-[10px] text-zinc-400">Measuring round-trip time & packet jitter</p>
+              </div>
+            ) : pingResult ? (
+              <div className="pt-3 space-y-3">
+                {/* Summary stats */}
+                <div className="grid grid-cols-3 gap-2 text-center text-[11px]">
+                  <div className="bg-zinc-50 dark:bg-zinc-950 p-2 rounded-lg border border-zinc-100 dark:border-zinc-800">
+                    <span className="text-zinc-400 block text-[9px] uppercase font-bold">Received</span>
+                    <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">{pingResult.received} / {pingResult.transmitted}</span>
+                  </div>
+                  <div className="bg-zinc-50 dark:bg-zinc-950 p-2 rounded-lg border border-zinc-100 dark:border-zinc-800">
+                    <span className="text-zinc-400 block text-[9px] uppercase font-bold">Packet Loss</span>
+                    <span className={`font-mono font-bold ${pingResult.lossPercent > 0 ? 'text-rose-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                      {pingResult.lossPercent}%
+                    </span>
+                  </div>
+                  <div className="bg-zinc-50 dark:bg-zinc-950 p-2 rounded-lg border border-zinc-100 dark:border-zinc-800">
+                    <span className="text-zinc-400 block text-[9px] uppercase font-bold">Avg Latency</span>
+                    <span className="font-mono font-bold text-blue-600 dark:text-blue-400">{pingResult.avgMs} ms</span>
+                  </div>
+                </div>
+
+                {/* Packet log details */}
+                <div className="bg-zinc-950 text-emerald-400 p-2.5 rounded-xl font-mono text-[10.5px] space-y-1 max-h-36 overflow-y-auto shadow-inner border border-zinc-800">
+                  {pingResult.packets.map((pkt) => (
+                    <div key={pkt.seq} className="flex justify-between items-center">
+                      <span>64 bytes from {pingResult.device.ip}: icmp_seq={pkt.seq} ttl={pkt.ttl}</span>
+                      <span className={pkt.status === 'reply' ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                        {pkt.status === 'reply' ? `${pkt.rttMs} ms` : 'Request Timeout'}
+                      </span>
+                    </div>
+                  ))}
+                  <div className="pt-1.5 border-t border-zinc-800 text-[9.5px] text-zinc-400 flex justify-between font-mono">
+                    <span>rtt min/avg/max = {pingResult.minMs}/{pingResult.avgMs}/{pingResult.maxMs} ms</span>
+                    <span className="text-emerald-500 font-bold">Done</span>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </motion.div>
         )}
       </AnimatePresence>

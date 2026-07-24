@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Credential, Device } from '../types.js';
-import { Key, Lock, Plus, Trash2, Eye, ShieldCheck, Check, UserCheck, Smartphone } from 'lucide-react';
+import { Key, Lock, Plus, Trash2, Eye, ShieldCheck, Check, UserCheck, Smartphone, Edit3 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface CredentialsVaultProps {
@@ -8,6 +8,7 @@ interface CredentialsVaultProps {
   devices: Device[];
   currentUserRole: string;
   onAddCredential: (cred: Partial<Credential>) => Promise<void>;
+  onEditCredential?: (id: string, cred: Partial<Credential>) => Promise<void>;
   onDeleteCredential: (id: string) => Promise<void>;
 }
 
@@ -16,9 +17,11 @@ export default function CredentialsVault({
   devices,
   currentUserRole,
   onAddCredential,
+  onEditCredential,
   onDeleteCredential
 }: CredentialsVaultProps) {
   const [isOpenForm, setIsOpenForm] = useState(false);
+  const [editingCredId, setEditingCredId] = useState<string | null>(null);
   const [label, setLabel] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -31,19 +34,50 @@ export default function CredentialsVault({
     setVisiblePasswords(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const handleOpenNewForm = () => {
+    setEditingCredId(null);
+    setLabel('');
+    setUsername('');
+    setPassword('');
+    setCredType('global');
+    setDeviceId('');
+    setIsOpenForm(true);
+  };
+
+  const handleOpenEditForm = (cred: any) => {
+    setEditingCredId(cred.id);
+    setLabel(cred.label || '');
+    setUsername(cred.username || '');
+    setPassword(cred.password || '');
+    setCredType(cred.type || 'global');
+    setDeviceId(cred.deviceId || '');
+    setIsOpenForm(true);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!label || !username) return;
 
-    await onAddCredential({
-      label,
-      username,
-      password,
-      type: credType,
-      deviceId: credType === 'device' ? deviceId : null
-    });
+    if (editingCredId && onEditCredential) {
+      await onEditCredential(editingCredId, {
+        label,
+        username,
+        password,
+        type: credType,
+        deviceId: credType === 'device' ? deviceId : null
+      });
+    } else {
+      await onAddCredential({
+        label,
+        username,
+        password,
+        type: credType,
+        deviceId: credType === 'device' ? deviceId : null
+      });
+    }
 
     // Reset Form
+    setEditingCredId(null);
     setLabel('');
     setUsername('');
     setPassword('');
@@ -67,7 +101,7 @@ export default function CredentialsVault({
         <button
           id="btn_open_vault_form"
           disabled={currentUserRole !== 'admin'}
-          onClick={() => setIsOpenForm(!isOpenForm)}
+          onClick={handleOpenNewForm}
           className="px-4 py-2 bg-blue-600 disabled:opacity-50 text-white rounded-lg font-semibold text-xs flex items-center gap-1.5 shadow hover:bg-blue-700 transition"
         >
           <Plus className="w-3.5 h-3.5" />
@@ -85,7 +119,9 @@ export default function CredentialsVault({
             onSubmit={handleSubmit}
             className="p-5 bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 rounded-xl space-y-4"
           >
-            <h4 className="font-bold text-zinc-900 dark:text-zinc-100 text-xs uppercase tracking-wider">Configure Secure Vault Key</h4>
+            <h4 className="font-bold text-zinc-900 dark:text-zinc-100 text-xs uppercase tracking-wider">
+              {editingCredId ? 'Edit Vault Credential' : 'Configure Secure Vault Key'}
+            </h4>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
@@ -190,7 +226,7 @@ export default function CredentialsVault({
                 id="btn_save_cred"
                 className="px-4 py-2 bg-blue-600 text-white text-xs font-semibold rounded-lg hover:bg-blue-700 shadow-sm transition"
               >
-                Save Credential securely
+                {editingCredId ? 'Update Credential' : 'Save Credential securely'}
               </button>
             </div>
           </motion.form>
@@ -251,6 +287,15 @@ export default function CredentialsVault({
                 </div>
 
                 <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+                  <button
+                    id={`btn_edit_c_${cred.id}`}
+                    disabled={currentUserRole !== 'admin'}
+                    onClick={() => handleOpenEditForm(cred)}
+                    className="p-1.5 bg-blue-50 dark:bg-blue-950 hover:bg-blue-100 dark:hover:bg-blue-900 rounded text-blue-600 dark:text-blue-400 transition"
+                    title="Edit credential details"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                  </button>
                   <button
                     id={`btn_toggle_p_${cred.id}`}
                     onClick={() => togglePasswordVisibility(cred.id)}

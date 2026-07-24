@@ -59,6 +59,31 @@ export interface NetworkSnapshot {
 
 export type UserRole = 'admin' | 'operator';
 
+export interface PingPacket {
+  seq: number;
+  bytes: number;
+  rttMs: number;
+  ttl: number;
+  status: 'reply' | 'timeout';
+}
+
+export interface PingResult {
+  success: boolean;
+  device: {
+    id: string;
+    name: string;
+    ip: string;
+    status: DeviceStatus;
+  };
+  transmitted: number;
+  received: number;
+  lossPercent: number;
+  minMs: number;
+  avgMs: number;
+  maxMs: number;
+  packets: PingPacket[];
+}
+
 export interface SystemStats {
   totalDevices: number;
   onlineCount: number;
