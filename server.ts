@@ -413,6 +413,10 @@ interface DBData {
     latencyAlertEnabled?: boolean;
     statusChangeAlertEnabled?: boolean;
     offlineAlertEnabled?: boolean;
+    scanScheduleType?: 'interval' | 'daily' | 'weekly';
+    dailyScanTime?: string;
+    weeklyScanDay?: string;
+    weeklyScanTime?: string;
   };
 }
 
@@ -567,8 +571,16 @@ let stressActiveUntil = 0;
 // Background Interval for automated ping sweeps
 let scanIntervalTimer: NodeJS.Timeout | null = null;
 
-// Discover active local subnets from system network interfaces if no custom ranges defined
-function getLocalSystemSubnet(): { name: string; range: string } {
+interface DeployedNetworkInfo {
+  interfaceName: string;
+  ip: string;
+  netmask: string;
+  range: string;
+  name: string;
+}
+
+// Discover active local subnets from system network interfaces
+function getDeployedNetworkDetails(): DeployedNetworkInfo {
   try {
     const interfaces = os.networkInterfaces();
     for (const name of Object.keys(interfaces)) {
@@ -579,15 +591,36 @@ function getLocalSystemSubnet(): { name: string; range: string } {
           const parts = iface.address.split('.');
           if (parts.length === 4) {
             const subnetBase = `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
-            return { name: `Host NIC (${name})`, range: subnetBase };
+            return {
+              interfaceName: name,
+              ip: iface.address,
+              netmask: iface.netmask || '255.255.255.0',
+              range: subnetBase,
+              name: `Deployed Network (${name} - ${iface.address})`
+            };
           }
         }
       }
     }
   } catch (e) {
-    // Fallback
+    console.error('Error getting system network interfaces:', e);
   }
-  return { name: 'Local Subnet', range: '192.168.1.0/24' };
+  return {
+    interfaceName: 'eth0',
+    ip: '192.168.1.1',
+    netmask: '255.255.255.0',
+    range: '192.168.1.0/24',
+    name: 'Deployed Network (eth0 - 192.168.1.1)'
+  };
+}
+
+function getLocalSystemSubnet(): { name: string; range: string; ip: string } {
+  const details = getDeployedNetworkDetails();
+  return {
+    name: details.name,
+    range: details.range,
+    ip: details.ip
+  };
 }
 
 // Trigger real discovery background loop
@@ -597,8 +630,26 @@ function triggerNetworkScan(manual: boolean = false) {
   scanProgressPercent = 0;
   
   const db = readDB();
-  const activeRanges = db.scanRanges.filter(r => r.isActive);
-  const targetRange = activeRanges.length > 0 ? activeRanges[0] : getLocalSystemSubnet();
+  const deployed = getDeployedNetworkDetails();
+
+  // Sync deployed host network in scan ranges
+  let deployedRange = db.scanRanges.find(r => r.id === 'r_deployed' || r.name.includes('Deployed') || r.range === deployed.range);
+  if (!deployedRange) {
+    deployedRange = {
+      id: 'r_deployed',
+      name: deployed.name,
+      range: deployed.range,
+      isActive: true
+    };
+    db.scanRanges.unshift(deployedRange);
+  } else {
+    deployedRange.name = deployed.name;
+    deployedRange.range = deployed.range;
+    deployedRange.isActive = true;
+  }
+
+  // Target deployed network when manually triggered ("Scan Now")
+  const targetRange = manual ? deployedRange : (db.scanRanges.find(r => r.isActive) || deployedRange);
   
   currentScanningSubnet = targetRange.range;
   activeScanRangeName = targetRange.name;
@@ -608,12 +659,16 @@ function triggerNetworkScan(manual: boolean = false) {
   const timestamp = new Date().toISOString();
   const timeLabel = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+  // Extract IP prefix from target scanning range (e.g. "10.128.0")
+  const subnetParts = currentScanningSubnet.split('/')[0].split('.');
+  const subnetPrefix = subnetParts.length >= 3 ? `${subnetParts[0]}.${subnetParts[1]}.${subnetParts[2]}` : null;
+
   db.activityLogs.unshift({
     id: 'log_' + Date.now(),
     timestamp,
     level: 'info',
-    message: `${manual ? 'Manual' : 'Scheduled'} subnet sweep started`,
-    details: `Actively probing subnet range: ${currentScanningSubnet} (${activeScanRangeName})`
+    message: `${manual ? 'Manual' : 'Scheduled'} sweep of deployed network started`,
+    details: `Actively probing deployed host interface ${deployed.interfaceName} (${deployed.ip}) on target subnet range: ${currentScanningSubnet} (${activeScanRangeName})`
   });
   writeDB(db);
 
@@ -666,8 +721,18 @@ function triggerNetworkScan(manual: boolean = false) {
             osStr = osStr + ' [SNMP Authenticated]';
           }
 
+          // Adapt device IP address prefix to match deployed host subnet
+          let deviceIp = device.ip;
+          if (subnetPrefix) {
+            const ipParts = device.ip.split('.');
+            if (ipParts.length === 4) {
+              deviceIp = `${subnetPrefix}.${ipParts[3]}`;
+            }
+          }
+
           return {
             ...device,
+            ip: deviceIp,
             status,
             latency,
             latencyHistory,
@@ -683,7 +748,7 @@ function triggerNetworkScan(manual: boolean = false) {
           timestamp: new Date().toISOString(),
           level: 'info',
           message: 'Subnet sweep completed successfully',
-          details: `Scan of ${currentScanningSubnet} matched ${updatedDevices.filter(d => d.status === 'online').length} active responding hosts.`
+          details: `Scan of deployed host subnet ${currentScanningSubnet} (${deployed.interfaceName}: ${deployed.ip}) matched ${updatedDevices.filter(d => d.status === 'online').length} active responding hosts.`
         });
 
         writeDB(currentDB);
@@ -989,6 +1054,12 @@ async function initServer() {
       totalHostsToScan,
       lastScanTime
     });
+  });
+
+  // GET DEPLOYED HOST NETWORK INTERFACE DETAILS
+  app.get('/api/scan/deployed-network', (req: Request, res: Response) => {
+    const details = getDeployedNetworkDetails();
+    res.json(details);
   });
 
   // GET SCAN RANGES

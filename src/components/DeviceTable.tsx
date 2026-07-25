@@ -17,6 +17,7 @@ import {
   Sparkles,
   Link,
   ChevronDown,
+  ChevronRight,
   Globe,
   Shield,
   Router,
@@ -35,7 +36,13 @@ import {
   Ban,
   MoreVertical,
   Trash2,
-  Tag
+  Tag,
+  Smartphone,
+  Tablet,
+  Clock,
+  Activity,
+  HardDrive,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -85,6 +92,16 @@ export default function DeviceTable({
 
   // Row selection state
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  // Expandable rows state
+  const [expandedRowIds, setExpandedRowIds] = useState<string[]>([]);
+
+  const toggleRowExpand = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setExpandedRowIds(prev => 
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
+  };
 
   // Row ellipsis action menu state
   const [activeMenuDeviceId, setActiveMenuDeviceId] = useState<string | null>(null);
@@ -368,42 +385,124 @@ export default function DeviceTable({
     );
   };
 
-  const getDeviceIcon = (type: DeviceType, status: DeviceStatus, name?: string, sizeClass = "w-4 h-4") => {
-    let color = "text-zinc-400 dark:text-zinc-500";
-    if (status === 'online') color = "text-emerald-500 dark:text-emerald-400";
-    else if (status === 'sleep') color = "text-amber-500 dark:text-amber-400";
-    else if (status === 'offline') color = "text-rose-500 dark:text-rose-400";
-
+  const getDeviceTypeInfo = (type: DeviceType | string, name: string = '', os: string = '') => {
     const nameLower = (name || '').toLowerCase();
+    const osLower = (os || '').toLowerCase();
+    const typeLower = (type || '').toLowerCase();
 
-    switch (type) {
-      case 'modem':
-        return <Globe className={`${sizeClass} ${color} transition-colors`} />;
-      case 'firewall':
-        return <Shield className={`${sizeClass} ${color} transition-colors`} />;
-      case 'router':
-        return <Router className={`${sizeClass} ${color} transition-colors`} />;
-      case 'switch':
-        return <Network className={`${sizeClass} ${color} transition-colors`} />;
-      case 'ap':
-        return <Wifi className={`${sizeClass} ${color} transition-colors`} />;
-      case 'extender':
-        return <Radio className={`${sizeClass} ${color} transition-colors`} />;
-      case 'computer':
-        if (nameLower.includes('server')) {
-          return <Server className={`${sizeClass} ${color} transition-colors`} />;
-        }
-        if (nameLower.includes('mac') || nameLower.includes('laptop') || nameLower.includes('workstation')) {
-          return <Laptop className={`${sizeClass} ${color} transition-colors`} />;
-        }
-        return <Monitor className={`${sizeClass} ${color} transition-colors`} />;
-      case 'printer':
-        return <Printer className={`${sizeClass} ${color} transition-colors`} />;
-      case 'scanner':
-        return <Scan className={`${sizeClass} ${color} transition-colors`} />;
-      default:
-        return <HelpCircle className={`${sizeClass} ${color} transition-colors`} />;
+    if (typeLower === 'switch') {
+      return {
+        label: 'Switch',
+        Icon: Network,
+        color: 'text-blue-600 dark:text-blue-400',
+        bg: 'bg-blue-50 dark:bg-blue-950/50 border-blue-200 dark:border-blue-900/60'
+      };
     }
+    if (typeLower === 'router') {
+      return {
+        label: 'Router',
+        Icon: Router,
+        color: 'text-indigo-600 dark:text-indigo-400',
+        bg: 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-200 dark:border-indigo-900/60'
+      };
+    }
+    if (typeLower === 'modem') {
+      return {
+        label: 'Modem',
+        Icon: Globe,
+        color: 'text-cyan-600 dark:text-cyan-400',
+        bg: 'bg-cyan-50 dark:bg-cyan-950/50 border-cyan-200 dark:border-cyan-900/60'
+      };
+    }
+    if (typeLower === 'firewall') {
+      return {
+        label: 'Firewall',
+        Icon: Shield,
+        color: 'text-amber-600 dark:text-amber-400',
+        bg: 'bg-amber-50 dark:bg-amber-950/50 border-amber-200 dark:border-amber-900/60'
+      };
+    }
+    if (typeLower === 'ap') {
+      return {
+        label: 'Access Point',
+        Icon: Wifi,
+        color: 'text-teal-600 dark:text-teal-400',
+        bg: 'bg-teal-50 dark:bg-teal-950/50 border-teal-200 dark:border-teal-900/60'
+      };
+    }
+    if (typeLower === 'extender') {
+      return {
+        label: 'Extender',
+        Icon: Radio,
+        color: 'text-sky-600 dark:text-sky-400',
+        bg: 'bg-sky-50 dark:bg-sky-950/50 border-sky-200 dark:border-sky-900/60'
+      };
+    }
+    if (typeLower === 'printer') {
+      return {
+        label: 'Printer',
+        Icon: Printer,
+        color: 'text-orange-600 dark:text-orange-400',
+        bg: 'bg-orange-50 dark:bg-orange-950/50 border-orange-200 dark:border-orange-900/60'
+      };
+    }
+    if (typeLower === 'scanner') {
+      return {
+        label: 'Scanner',
+        Icon: Scan,
+        color: 'text-fuchsia-600 dark:text-fuchsia-400',
+        bg: 'bg-fuchsia-50 dark:bg-fuchsia-950/50 border-fuchsia-200 dark:border-fuchsia-900/60'
+      };
+    }
+
+    // Specific Computer Sub-types (Server, Laptop, Mobile, Workstation)
+    if (nameLower.includes('server') || osLower.includes('server') || typeLower === 'server') {
+      return {
+        label: 'Server',
+        Icon: Server,
+        color: 'text-emerald-600 dark:text-emerald-400',
+        bg: 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-200 dark:border-emerald-900/60'
+      };
+    }
+
+    if (
+      nameLower.includes('laptop') || 
+      nameLower.includes('macbook') || 
+      nameLower.includes('notebook') || 
+      osLower.includes('macbook') || 
+      typeLower === 'laptop'
+    ) {
+      return {
+        label: 'Laptop',
+        Icon: Laptop,
+        color: 'text-purple-600 dark:text-purple-400',
+        bg: 'bg-purple-50 dark:bg-purple-950/50 border-purple-200 dark:border-purple-900/60'
+      };
+    }
+
+    if (
+      nameLower.includes('phone') || 
+      nameLower.includes('iphone') || 
+      nameLower.includes('android') || 
+      nameLower.includes('mobile') || 
+      nameLower.includes('ipad') || 
+      nameLower.includes('tablet') ||
+      typeLower === 'mobile'
+    ) {
+      return {
+        label: 'Mobile',
+        Icon: Smartphone,
+        color: 'text-pink-600 dark:text-pink-400',
+        bg: 'bg-pink-50 dark:bg-pink-950/50 border-pink-200 dark:border-pink-900/60'
+      };
+    }
+
+    return {
+      label: 'Computer',
+      Icon: Monitor,
+      color: 'text-zinc-600 dark:text-zinc-400',
+      bg: 'bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700'
+    };
   };
 
   return (
@@ -597,6 +696,9 @@ export default function DeviceTable({
           <table id="devices_data_table" className="w-full text-left border-collapse table-auto">
             <thead>
               <tr className="bg-zinc-50 dark:bg-zinc-800/60 border-b border-zinc-200 dark:border-zinc-800 text-[11px] font-bold uppercase text-zinc-500 tracking-wider">
+                {/* Expand / Collapse Toggle Header */}
+                <th className="p-4 w-8 text-center"></th>
+
                 {/* Checkbox column header */}
                 <th className="p-4 w-10 text-center">
                   <input 
@@ -642,7 +744,7 @@ export default function DeviceTable({
             <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800 text-xs text-zinc-700 dark:text-zinc-300">
               {paginatedDevices.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="p-8 text-center text-zinc-400 font-sans italic">
+                  <td colSpan={11} className="p-8 text-center text-zinc-400 font-sans italic">
                     No matching devices found on this active subnet sweep.
                   </td>
                 </tr>
@@ -650,316 +752,511 @@ export default function DeviceTable({
                 paginatedDevices.map((device) => {
                   const isEditing = editingDeviceId === device.id;
                   const isSelected = selectedIds.includes(device.id);
+                  const isExpanded = expandedRowIds.includes(device.id);
+                  const typeInfo = getDeviceTypeInfo(device.deviceType, device.name, device.os);
+                  const TypeIcon = typeInfo.Icon;
                   
                   return (
-                    <tr 
-                      key={device.id} 
-                      id={`row-${device.id}`}
-                      className={`hover:bg-zinc-50 dark:hover:bg-zinc-800/30 transition-all duration-200 ${
-                        device.isNew ? 'bg-yellow-500/10 dark:bg-yellow-500/5 font-medium' : ''
-                      } ${isSelected ? 'bg-blue-50/40 dark:bg-blue-950/10' : ''}`}
-                    >
-                      {/* Selection checkbox */}
-                      <td className="p-4 text-center">
-                        <input 
-                          id={`check_select_${device.id}`}
-                          type="checkbox" 
-                          checked={isSelected} 
-                          onChange={() => handleSelectRow(device.id)} 
-                          className="rounded border-zinc-300 dark:border-zinc-700 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5 cursor-pointer"
-                        />
-                      </td>
-
-                      {/* STATUS BADGE WITH DISTINCT HIGH-CONTRAST ICONS */}
-                      <td className="p-4 text-center">
-                        {getStatusBadge(device.status, device.isNew)}
-                      </td>
-
-                      {/* IP ADDRESS */}
-                      <td className="p-4 font-mono font-semibold text-zinc-950 dark:text-zinc-200">
-                        {device.ip}
-                      </td>
-
-                      {/* NAME / HOSTNAME */}
-                      <td className="p-4">
-                        {isEditing ? (
-                          <input
-                            id={`edit_name_${device.id}`}
-                            type="text"
-                            value={editName}
-                            onChange={(e) => setEditName(e.target.value)}
-                            className="w-full px-2 py-1 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none"
-                          />
-                        ) : (
-                          <div className="flex flex-col">
-                            <span className="font-bold text-zinc-900 dark:text-zinc-100">{device.name}</span>
-                            {device.notes && (
-                              <span className="text-[10.5px] text-zinc-400 italic truncate max-w-[150px]" title={device.notes}>
-                                {device.notes}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* DEVICE TYPE */}
-                      <td className="p-4 capitalize">
-                        {isEditing ? (
-                          <select
-                            id={`edit_type_${device.id}`}
-                            value={editType}
-                            onChange={(e) => setEditType(e.target.value as DeviceType)}
-                            className="w-full px-2 py-1 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none"
+                    <React.Fragment key={device.id}>
+                      <tr 
+                        id={`row-${device.id}`}
+                        onClick={(e) => {
+                          const target = e.target as HTMLElement;
+                          if (!target.closest('button, input, select, a, textarea')) {
+                            toggleRowExpand(device.id);
+                          }
+                        }}
+                        className={`hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-all duration-200 cursor-pointer ${
+                          device.isNew ? 'bg-yellow-500/10 dark:bg-yellow-500/5 font-medium' : ''
+                        } ${isSelected ? 'bg-blue-50/40 dark:bg-blue-950/10' : ''} ${isExpanded ? 'bg-zinc-50/60 dark:bg-zinc-800/30 font-medium' : ''}`}
+                      >
+                        {/* Expand / Collapse Button Column */}
+                        <td className="p-4 text-center w-8">
+                          <button
+                            id={`btn_expand_row_${device.id}`}
+                            onClick={(e) => toggleRowExpand(device.id, e)}
+                            className="p-1 hover:bg-zinc-200/60 dark:hover:bg-zinc-700/60 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
+                            title={isExpanded ? "Collapse device details" : "Expand device details"}
                           >
-                            <option value="modem">Modem</option>
-                            <option value="firewall">Firewall</option>
-                            <option value="router">Router</option>
-                            <option value="switch">Switch</option>
-                            <option value="ap">Access Point</option>
-                            <option value="extender">Extender</option>
-                            <option value="computer">Computer</option>
-                            <option value="printer">Printer</option>
-                            <option value="scanner">Scanner</option>
-                          </select>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-zinc-100 dark:bg-zinc-800 rounded-full text-[10.5px] font-medium text-zinc-600 dark:text-zinc-400 capitalize">
-                            {getDeviceIcon(device.deviceType, device.status, device.name, "w-3.5 h-3.5")}
-                            {device.deviceType}
-                          </span>
-                        )}
-                      </td>
-
-                      {/* OS FINGERPRINT */}
-                      <td className="p-4 font-mono text-[11px] truncate max-w-[180px]" title={device.os}>
-                        {isEditing ? (
-                          <input
-                            id={`edit_os_${device.id}`}
-                            type="text"
-                            value={editOS}
-                            onChange={(e) => setEditOS(e.target.value)}
-                            className="w-full px-2 py-1 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none"
-                          />
-                        ) : (
-                          device.os
-                        )}
-                      </td>
-
-                      {/* PING LATENCY */}
-                      <td className="p-4 text-center font-mono font-bold">
-                        {device.status === 'online' ? (
-                          <span className={`${
-                            device.latency < 2 ? 'text-emerald-600 dark:text-emerald-400' :
-                            device.latency < 5 ? 'text-blue-500' : 'text-amber-500'
-                          }`}>
-                            {device.latency} ms
-                          </span>
-                        ) : (
-                          <span className="text-zinc-400">-</span>
-                        )}
-                      </td>
-
-                      {/* PARENT/UPLINK GATEWAY */}
-                      <td className="p-4 text-xs text-zinc-500">
-                        {device.parentId ? (
-                          <div className="flex flex-col">
-                            <span className="font-semibold text-zinc-700 dark:text-zinc-300">
-                              {devices.find(d => d.id === device.parentId)?.name || 'Gateway Switch'}
-                            </span>
-                            {device.switchPort && (
-                              <span className="text-[10px] text-zinc-400 font-mono">Switch Port {device.switchPort}</span>
+                            {isExpanded ? (
+                              <ChevronDown className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                            ) : (
+                              <ChevronRight className="w-4 h-4 text-zinc-400" />
                             )}
-                          </div>
-                        ) : (
-                          <span className="italic">Core Uplink</span>
-                        )}
-                      </td>
+                          </button>
+                        </td>
 
-                      {/* MAC OUI VENDOR */}
-                      <td className="p-4 text-zinc-500 font-sans truncate max-w-[120px]" title={device.vendor}>
-                        {device.vendor}
-                      </td>
+                        {/* Selection checkbox */}
+                        <td className="p-4 text-center">
+                          <input 
+                            id={`check_select_${device.id}`}
+                            type="checkbox" 
+                            checked={isSelected} 
+                            onChange={() => handleSelectRow(device.id)} 
+                            className="rounded border-zinc-300 dark:border-zinc-700 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5 cursor-pointer"
+                          />
+                        </td>
 
-                      {/* COMBINED ACTIONS UNDER AN ELLIPSIS DROPDOWN */}
-                      <td className="p-4 text-right whitespace-nowrap relative">
-                        <div className="flex items-center justify-end gap-1.5">
+                        {/* STATUS BADGE WITH DISTINCT HIGH-CONTRAST ICONS */}
+                        <td className="p-4 text-center">
+                          {getStatusBadge(device.status, device.isNew)}
+                        </td>
+
+                        {/* IP ADDRESS */}
+                        <td className="p-4 font-mono font-semibold text-zinc-950 dark:text-zinc-200">
+                          {device.ip}
+                        </td>
+
+                        {/* NAME / HOSTNAME */}
+                        <td className="p-4">
                           {isEditing ? (
-                            <>
-                              <button
-                                id={`btn_save_edit_${device.id}`}
-                                onClick={() => saveEdit(device)}
-                                className="p-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 rounded border border-emerald-200 dark:border-emerald-900 transition"
-                                title="Save device edits"
-                              >
-                                <Check className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                id={`btn_cancel_edit_${device.id}`}
-                                onClick={cancelEdit}
-                                className="p-1 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 rounded border border-rose-200 dark:border-rose-900 transition"
-                                title="Cancel editing"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </>
+                            <input
+                              id={`edit_name_${device.id}`}
+                              type="text"
+                              value={editName}
+                              onChange={(e) => setEditName(e.target.value)}
+                              className="w-full px-2 py-1 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none"
+                            />
                           ) : (
-                            <div className="relative inline-block text-left">
-                              <button
-                                id={`btn_actions_menu_${device.id}`}
-                                onClick={() => setActiveMenuDeviceId(activeMenuDeviceId === device.id ? null : device.id)}
-                                className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-zinc-500 dark:text-zinc-400 transition cursor-pointer"
-                                title="Actions Menu"
-                              >
-                                <MoreVertical className="w-4 h-4" />
-                              </button>
-
-                              {/* Action dropdown menu */}
-                              <AnimatePresence>
-                                {activeMenuDeviceId === device.id && (
-                                  <>
-                                    {/* Transparent click catcher backing layer */}
-                                    <div 
-                                      className="fixed inset-0 z-20 cursor-default" 
-                                      onClick={() => setActiveMenuDeviceId(null)}
-                                    />
-                                    <motion.div
-                                      id={`actions_dropdown_${device.id}`}
-                                      initial={{ opacity: 0, scale: 0.95, y: 5 }}
-                                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                                      exit={{ opacity: 0, scale: 0.95, y: 5 }}
-                                      className="absolute right-0 mt-1 z-30 w-52 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 p-1.5 rounded-xl shadow-xl text-xs text-left divide-y divide-zinc-100 dark:divide-zinc-800/80"
-                                    >
-                                      {/* Core utilities */}
-                                      <div className="py-1">
-                                        <button
-                                          id={`btn_menu_edit_${device.id}`}
-                                          onClick={() => {
-                                            startEditing(device);
-                                            setActiveMenuDeviceId(null);
-                                          }}
-                                          disabled={currentUserRole !== 'admin'}
-                                          className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-zinc-700 dark:text-zinc-300 disabled:opacity-50 transition text-left cursor-pointer"
-                                        >
-                                          <Edit2 className="w-3.5 h-3.5 text-zinc-400" />
-                                          <span>Edit Specifications</span>
-                                        </button>
-
-                                        {onSelectDeviceOnGraph && (
-                                          <button
-                                            id={`btn_menu_locate_${device.id}`}
-                                            onClick={() => {
-                                              onSelectDeviceOnGraph(device);
-                                              setActiveMenuDeviceId(null);
-                                            }}
-                                            className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-zinc-700 dark:text-zinc-300 transition text-left cursor-pointer"
-                                          >
-                                            <Eye className="w-3.5 h-3.5 text-zinc-400" />
-                                            <span>Locate on Map</span>
-                                          </button>
-                                        )}
-
-                                        {onAnalyzeDevice && (
-                                          <button
-                                            id={`btn_menu_ai_${device.id}`}
-                                            onClick={() => {
-                                              onAnalyzeDevice(device);
-                                              setActiveMenuDeviceId(null);
-                                            }}
-                                            disabled={isAnalyzing}
-                                            className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-indigo-600 dark:text-indigo-400 disabled:opacity-50 transition text-left cursor-pointer font-semibold"
-                                          >
-                                            <Sparkles className="w-3.5 h-3.5 text-indigo-500 animate-pulse" />
-                                            <span>Run Gemini AI Audit</span>
-                                          </button>
-                                        )}
-                                      </div>
-
-                                      {/* New Device Approval/Decline */}
-                                      {device.isNew && onAcceptDevice && onRejectDevice && (
-                                        <div className="py-1">
-                                          <button
-                                            id={`btn_menu_accept_${device.id}`}
-                                            onClick={async () => {
-                                              await onAcceptDevice(device.id);
-                                              setActiveMenuDeviceId(null);
-                                            }}
-                                            className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-emerald-50 dark:hover:bg-emerald-950/20 rounded-lg text-emerald-600 dark:text-emerald-400 font-semibold transition text-left cursor-pointer"
-                                          >
-                                            <Check className="w-3.5 h-3.5" />
-                                            <span>Approve & Accept</span>
-                                          </button>
-                                          <button
-                                            id={`btn_menu_reject_${device.id}`}
-                                            onClick={async () => {
-                                              await onRejectDevice(device.id);
-                                              setActiveMenuDeviceId(null);
-                                            }}
-                                            className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-lg text-rose-600 dark:text-rose-400 font-semibold transition text-left cursor-pointer"
-                                          >
-                                            <X className="w-3.5 h-3.5" />
-                                            <span>Decline & Reject</span>
-                                          </button>
-                                        </div>
-                                      )}
-
-                                      {/* Credentials Mapping Overrides */}
-                                      <div className="py-1">
-                                        <div className="px-2.5 py-1 text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
-                                          Credential Overrides
-                                        </div>
-                                        <button
-                                          id={`btn_menu_cred_none_${device.id}`}
-                                          onClick={async () => {
-                                            await bindCredentialToDevice(device, null);
-                                            setActiveMenuDeviceId(null);
-                                          }}
-                                          className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-zinc-600 dark:text-zinc-400 transition text-left cursor-pointer"
-                                        >
-                                          <Link className="w-3.5 h-3.5 text-zinc-400" />
-                                          <span>Default Global</span>
-                                        </button>
-                                        {credentials.map(c => (
-                                          <button
-                                            key={c.id}
-                                            id={`btn_menu_cred_${c.id}_${device.id}`}
-                                            onClick={async () => {
-                                              await bindCredentialToDevice(device, c.id);
-                                              setActiveMenuDeviceId(null);
-                                            }}
-                                            className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-zinc-700 dark:text-zinc-300 transition text-left cursor-pointer"
-                                          >
-                                            <Link className="w-3.5 h-3.5 text-zinc-400" />
-                                            <span className="truncate">{c.label}</span>
-                                          </button>
-                                        ))}
-                                      </div>
-
-                                      {/* Deletion of individual row */}
-                                      {onBulkDelete && (
-                                        <div className="py-1">
-                                          <button
-                                            id={`btn_menu_delete_${device.id}`}
-                                            onClick={async () => {
-                                              if (window.confirm(`Are you sure you want to remove ${device.name} from active network inventory?`)) {
-                                                await onBulkDelete([device.id]);
-                                              }
-                                              setActiveMenuDeviceId(null);
-                                            }}
-                                            className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-lg text-rose-600 dark:text-rose-400 font-bold transition text-left cursor-pointer"
-                                          >
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                            <span>Delete Device</span>
-                                          </button>
-                                        </div>
-                                      )}
-                                    </motion.div>
-                                  </>
-                                )}
-                              </AnimatePresence>
+                            <div className="flex flex-col">
+                              <span className="font-bold text-zinc-900 dark:text-zinc-100">{device.name}</span>
+                              {device.notes && (
+                                <span className="text-[10.5px] text-zinc-400 italic truncate max-w-[150px]" title={device.notes}>
+                                  {device.notes}
+                                </span>
+                              )}
                             </div>
                           )}
-                        </div>
-                      </td>
-                    </tr>
+                        </td>
+
+                        {/* DEVICE TYPE WITH SPECIFIC ICONS (Laptop, Switch, Router, Mobile, Server, etc.) */}
+                        <td className="p-4">
+                          {isEditing ? (
+                            <select
+                              id={`edit_type_${device.id}`}
+                              value={editType}
+                              onChange={(e) => setEditType(e.target.value as DeviceType)}
+                              className="w-full px-2 py-1 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none"
+                            >
+                              <option value="computer">Computer / Laptop / Mobile / Server</option>
+                              <option value="router">Router</option>
+                              <option value="switch">Switch</option>
+                              <option value="ap">Access Point</option>
+                              <option value="firewall">Firewall</option>
+                              <option value="printer">Printer</option>
+                              <option value="scanner">Scanner</option>
+                              <option value="modem">Modem</option>
+                              <option value="extender">Extender</option>
+                            </select>
+                          ) : (
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${typeInfo.bg} ${typeInfo.color} shadow-2xs whitespace-nowrap`}>
+                              <TypeIcon className="w-3.5 h-3.5 shrink-0" />
+                              <span>{typeInfo.label}</span>
+                            </span>
+                          )}
+                        </td>
+
+                        {/* OS FINGERPRINT */}
+                        <td className="p-4 font-mono text-[11px] truncate max-w-[180px]" title={device.os}>
+                          {isEditing ? (
+                            <input
+                              id={`edit_os_${device.id}`}
+                              type="text"
+                              value={editOS}
+                              onChange={(e) => setEditOS(e.target.value)}
+                              className="w-full px-2 py-1 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none"
+                            />
+                          ) : (
+                            device.os
+                          )}
+                        </td>
+
+                        {/* PING LATENCY */}
+                        <td className="p-4 text-center font-mono font-bold">
+                          {device.status === 'online' ? (
+                            <span className={`${
+                              device.latency < 2 ? 'text-emerald-600 dark:text-emerald-400' :
+                              device.latency < 5 ? 'text-blue-500' : 'text-amber-500'
+                            }`}>
+                              {device.latency} ms
+                            </span>
+                          ) : (
+                            <span className="text-zinc-400">-</span>
+                          )}
+                        </td>
+
+                        {/* PARENT/UPLINK GATEWAY */}
+                        <td className="p-4 text-xs text-zinc-500">
+                          {device.parentId ? (
+                            <div className="flex flex-col">
+                              <span className="font-semibold text-zinc-700 dark:text-zinc-300">
+                                {devices.find(d => d.id === device.parentId)?.name || 'Gateway Switch'}
+                              </span>
+                              {device.switchPort && (
+                                <span className="text-[10px] text-zinc-400 font-mono">Switch Port {device.switchPort}</span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="italic">Core Uplink</span>
+                          )}
+                        </td>
+
+                        {/* MAC OUI VENDOR */}
+                        <td className="p-4 text-zinc-500 font-sans truncate max-w-[120px]" title={device.vendor}>
+                          {device.vendor}
+                        </td>
+
+                        {/* COMBINED ACTIONS UNDER AN ELLIPSIS DROPDOWN */}
+                        <td className="p-4 text-right whitespace-nowrap relative">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {isEditing ? (
+                              <>
+                                <button
+                                  id={`btn_save_edit_${device.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    saveEdit(device);
+                                  }}
+                                  className="p-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 rounded border border-emerald-200 dark:border-emerald-900 transition"
+                                  title="Save device edits"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  id={`btn_cancel_edit_${device.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    cancelEdit();
+                                  }}
+                                  className="p-1 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 rounded border border-rose-200 dark:border-rose-900 transition"
+                                  title="Cancel editing"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            ) : (
+                              <div className="relative inline-block text-left">
+                                <button
+                                  id={`btn_actions_menu_${device.id}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveMenuDeviceId(activeMenuDeviceId === device.id ? null : device.id);
+                                  }}
+                                  className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-zinc-500 dark:text-zinc-400 transition cursor-pointer"
+                                  title="Actions Menu"
+                                >
+                                  <MoreVertical className="w-4 h-4" />
+                                </button>
+
+                                {/* Action dropdown menu */}
+                                <AnimatePresence>
+                                  {activeMenuDeviceId === device.id && (
+                                    <>
+                                      {/* Transparent click catcher backing layer */}
+                                      <div 
+                                        className="fixed inset-0 z-20 cursor-default" 
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setActiveMenuDeviceId(null);
+                                        }}
+                                      />
+                                      <motion.div
+                                        id={`actions_dropdown_${device.id}`}
+                                        initial={{ opacity: 0, scale: 0.95, y: 5 }}
+                                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                                        exit={{ opacity: 0, scale: 0.95, y: 5 }}
+                                        className="absolute right-0 mt-1 z-30 w-52 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 p-1.5 rounded-xl shadow-xl text-xs text-left divide-y divide-zinc-100 dark:divide-zinc-800/80"
+                                      >
+                                        {/* Core utilities */}
+                                        <div className="py-1">
+                                          <button
+                                            id={`btn_menu_edit_${device.id}`}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              startEditing(device);
+                                              setActiveMenuDeviceId(null);
+                                            }}
+                                            disabled={currentUserRole !== 'admin'}
+                                            className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-zinc-700 dark:text-zinc-300 disabled:opacity-50 transition text-left cursor-pointer"
+                                          >
+                                            <Edit2 className="w-3.5 h-3.5 text-zinc-400" />
+                                            <span>Edit Specifications</span>
+                                          </button>
+
+                                          {onSelectDeviceOnGraph && (
+                                            <button
+                                              id={`btn_menu_locate_${device.id}`}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                onSelectDeviceOnGraph(device);
+                                                setActiveMenuDeviceId(null);
+                                              }}
+                                              className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-zinc-700 dark:text-zinc-300 transition text-left cursor-pointer"
+                                            >
+                                              <Eye className="w-3.5 h-3.5 text-zinc-400" />
+                                              <span>Locate on Map</span>
+                                            </button>
+                                          )}
+
+                                          {onAnalyzeDevice && (
+                                            <button
+                                              id={`btn_menu_ai_${device.id}`}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                onAnalyzeDevice(device);
+                                                setActiveMenuDeviceId(null);
+                                              }}
+                                              disabled={isAnalyzing}
+                                              className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-indigo-600 dark:text-indigo-400 disabled:opacity-50 transition text-left cursor-pointer font-semibold"
+                                            >
+                                              <Sparkles className="w-3.5 h-3.5 text-indigo-500 animate-pulse" />
+                                              <span>Run Gemini AI Audit</span>
+                                            </button>
+                                          )}
+                                        </div>
+
+                                        {/* New Device Approval/Decline */}
+                                        {device.isNew && onAcceptDevice && onRejectDevice && (
+                                          <div className="py-1">
+                                            <button
+                                              id={`btn_menu_accept_${device.id}`}
+                                              onClick={async (e) => {
+                                                e.stopPropagation();
+                                                await onAcceptDevice(device.id);
+                                                setActiveMenuDeviceId(null);
+                                              }}
+                                              className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-emerald-50 dark:hover:bg-emerald-950/20 rounded-lg text-emerald-600 dark:text-emerald-400 font-semibold transition text-left cursor-pointer"
+                                            >
+                                              <Check className="w-3.5 h-3.5" />
+                                              <span>Approve & Accept</span>
+                                            </button>
+                                            <button
+                                              id={`btn_menu_reject_${device.id}`}
+                                              onClick={async (e) => {
+                                                e.stopPropagation();
+                                                await onRejectDevice(device.id);
+                                                setActiveMenuDeviceId(null);
+                                              }}
+                                              className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-lg text-rose-600 dark:text-rose-400 font-semibold transition text-left cursor-pointer"
+                                            >
+                                              <X className="w-3.5 h-3.5" />
+                                              <span>Decline & Reject</span>
+                                            </button>
+                                          </div>
+                                        )}
+
+                                        {/* Credentials Mapping Overrides */}
+                                        <div className="py-1">
+                                          <div className="px-2.5 py-1 text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+                                            Credential Overrides
+                                          </div>
+                                          <button
+                                            id={`btn_menu_cred_none_${device.id}`}
+                                            onClick={async (e) => {
+                                              e.stopPropagation();
+                                              await bindCredentialToDevice(device, null);
+                                              setActiveMenuDeviceId(null);
+                                            }}
+                                            className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-zinc-600 dark:text-zinc-400 transition text-left cursor-pointer"
+                                          >
+                                            <Link className="w-3.5 h-3.5 text-zinc-400" />
+                                            <span>Default Global</span>
+                                          </button>
+                                          {credentials.map(c => (
+                                            <button
+                                              key={c.id}
+                                              id={`btn_menu_cred_${c.id}_${device.id}`}
+                                              onClick={async (e) => {
+                                                e.stopPropagation();
+                                                await bindCredentialToDevice(device, c.id);
+                                                setActiveMenuDeviceId(null);
+                                              }}
+                                              className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg text-zinc-700 dark:text-zinc-300 transition text-left cursor-pointer"
+                                            >
+                                              <Link className="w-3.5 h-3.5 text-zinc-400" />
+                                              <span className="truncate">{c.label}</span>
+                                            </button>
+                                          ))}
+                                        </div>
+
+                                        {/* Deletion of individual row */}
+                                        {onBulkDelete && (
+                                          <div className="py-1">
+                                            <button
+                                              id={`btn_menu_delete_${device.id}`}
+                                              onClick={async (e) => {
+                                                e.stopPropagation();
+                                                if (window.confirm(`Are you sure you want to remove ${device.name} from active network inventory?`)) {
+                                                  await onBulkDelete([device.id]);
+                                                }
+                                                setActiveMenuDeviceId(null);
+                                              }}
+                                              className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-lg text-rose-600 dark:text-rose-400 font-bold transition text-left cursor-pointer"
+                                            >
+                                              <Trash2 className="w-3.5 h-3.5" />
+                                              <span>Delete Device</span>
+                                            </button>
+                                          </div>
+                                        )}
+                                      </motion.div>
+                                    </>
+                                  )}
+                                </AnimatePresence>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* EXPANDABLE ROW DETAILS (REVEALING MAC ADDRESS, LAST SEEN TIMESTAMP, CUSTOM NOTES, & TELEMETRY) */}
+                      {isExpanded && (
+                        <tr id={`expanded-row-${device.id}`} className="bg-zinc-50/80 dark:bg-zinc-950/80 border-b border-zinc-200 dark:border-zinc-800">
+                          <td colSpan={11} className="p-0">
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              transition={{ duration: 0.2 }}
+                              className="p-4 sm:p-5 overflow-hidden"
+                            >
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white dark:bg-zinc-900 border border-zinc-200/90 dark:border-zinc-800 p-4 rounded-xl shadow-xs">
+                                {/* Extended Details Card 1: Hardware & Addressing */}
+                                <div className="space-y-2">
+                                  <div className="flex items-center gap-1.5 text-xs font-bold uppercase text-zinc-400 tracking-wider">
+                                    <Tag className="w-3.5 h-3.5 text-blue-500" />
+                                    <span>Physical Address & Hardware</span>
+                                  </div>
+                                  <div className="space-y-1.5 text-xs">
+                                    <div className="flex items-center justify-between py-1 border-b border-zinc-100 dark:border-zinc-800/80">
+                                      <span className="text-zinc-500">MAC Address:</span>
+                                      <span className="font-mono font-bold text-zinc-900 dark:text-zinc-100 bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded text-[11px]">
+                                        {device.mac || '00:00:00:00:00:00'}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between py-1 border-b border-zinc-100 dark:border-zinc-800/80">
+                                      <span className="text-zinc-500">OUI Vendor:</span>
+                                      <span className="font-semibold text-zinc-800 dark:text-zinc-200">{device.vendor}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between py-1 border-b border-zinc-100 dark:border-zinc-800/80">
+                                      <span className="text-zinc-500">IP Address:</span>
+                                      <span className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">{device.ip}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between py-1">
+                                      <span className="text-zinc-500">Inventory ID:</span>
+                                      <span className="font-mono text-[11px] text-zinc-400">{device.id}</span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Extended Details Card 2: Telemetry & Activity */}
+                                <div className="space-y-2">
+                                  <div className="flex items-center gap-1.5 text-xs font-bold uppercase text-zinc-400 tracking-wider">
+                                    <Clock className="w-3.5 h-3.5 text-emerald-500" />
+                                    <span>Telemetry & Last Activity</span>
+                                  </div>
+                                  <div className="space-y-1.5 text-xs">
+                                    <div className="flex items-center justify-between py-1 border-b border-zinc-100 dark:border-zinc-800/80">
+                                      <span className="text-zinc-500">Last Seen Timestamp:</span>
+                                      <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+                                        {device.lastSeen ? new Date(device.lastSeen).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Active now'}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between py-1 border-b border-zinc-100 dark:border-zinc-800/80">
+                                      <span className="text-zinc-500">OS Fingerprint:</span>
+                                      <span className="font-mono text-[11px] text-zinc-800 dark:text-zinc-200 truncate max-w-[160px]" title={device.os}>
+                                        {device.os}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between py-1 border-b border-zinc-100 dark:border-zinc-800/80">
+                                      <span className="text-zinc-500">Current Latency:</span>
+                                      <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                                        {device.status === 'online' ? `${device.latency} ms` : 'Offline / Inactive'}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between py-1">
+                                      <span className="text-zinc-500">Uplink Gateway:</span>
+                                      <span className="font-medium text-zinc-800 dark:text-zinc-200">
+                                        {device.parentId ? (devices.find(d => d.id === device.parentId)?.name || 'Gateway') : 'Core Uplink'}
+                                        {device.switchPort ? ` (Port ${device.switchPort})` : ''}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Extended Details Card 3: Custom Administrator Notes & Quick Actions */}
+                                <div className="space-y-2 flex flex-col justify-between">
+                                  <div>
+                                    <div className="flex items-center justify-between text-xs font-bold uppercase text-zinc-400 tracking-wider mb-1.5">
+                                      <div className="flex items-center gap-1.5">
+                                        <BookOpen className="w-3.5 h-3.5 text-purple-500" />
+                                        <span>Custom Administrator Notes</span>
+                                      </div>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          startEditing(device);
+                                        }}
+                                        className="text-[10.5px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer flex items-center gap-1 normal-case font-semibold"
+                                      >
+                                        <Edit2 className="w-3 h-3" /> Edit
+                                      </button>
+                                    </div>
+                                    <div className="p-2.5 bg-zinc-50 dark:bg-zinc-950 rounded-lg border border-zinc-100 dark:border-zinc-800/80 text-xs text-zinc-700 dark:text-zinc-300 min-h-[52px]">
+                                      {device.notes ? (
+                                        <p className="whitespace-pre-wrap leading-relaxed">{device.notes}</p>
+                                      ) : (
+                                        <p className="italic text-zinc-400">No administrator notes recorded for this host. Click Edit to add notes.</p>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Quick Actions Bar inside expanded details */}
+                                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800/80">
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRunPing(device);
+                                      }}
+                                      className="px-2.5 py-1.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/50 text-blue-600 dark:text-blue-400 rounded-lg text-xs font-bold hover:bg-blue-100 dark:hover:bg-blue-900/60 transition flex items-center gap-1.5 cursor-pointer"
+                                    >
+                                      <Radio className="w-3.5 h-3.5" />
+                                      <span>Run ICMP Ping</span>
+                                    </button>
+
+                                    {onSelectDeviceOnGraph && (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onSelectDeviceOnGraph(device);
+                                        }}
+                                        className="px-2.5 py-1.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-lg text-xs font-bold hover:bg-zinc-200 dark:hover:bg-zinc-700 transition flex items-center gap-1.5 cursor-pointer"
+                                      >
+                                        <Eye className="w-3.5 h-3.5 text-zinc-400" />
+                                        <span>Locate on Map</span>
+                                      </button>
+                                    )}
+
+                                    {onAnalyzeDevice && (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onAnalyzeDevice(device);
+                                        }}
+                                        disabled={isAnalyzing}
+                                        className="px-2.5 py-1.5 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900/50 text-indigo-600 dark:text-indigo-400 rounded-lg text-xs font-bold hover:bg-indigo-100 dark:hover:bg-indigo-900/60 disabled:opacity-50 transition flex items-center gap-1.5 cursor-pointer"
+                                      >
+                                        <Sparkles className="w-3.5 h-3.5 text-indigo-500 animate-pulse" />
+                                        <span>AI Risk Audit</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </motion.div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })
               )}

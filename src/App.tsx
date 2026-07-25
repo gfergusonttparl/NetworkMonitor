@@ -50,7 +50,13 @@ export default function App() {
   // Navigation & Layout states
   const [viewMode, setViewMode] = useState<'graph' | 'grid'>('graph');
   const [activeTab, setActiveTab] = useState<'monitor' | 'ranges' | 'credentials' | 'snapshots' | 'logs' | 'performance' | 'reports'>('monitor');
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('app_theme');
+      if (saved === 'dark' || saved === 'light') return saved;
+    }
+    return 'light';
+  });
 
   // Unified State from Express Backend
   const [devices, setDevices] = useState<Device[]>([]);
@@ -108,6 +114,9 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setSettings(data);
+        if (data.darkThemeByDefault && !localStorage.getItem('app_theme')) {
+          setTheme('dark');
+        }
       }
     } catch (err) {
       console.error('Failed to load global settings:', err);
@@ -199,14 +208,17 @@ export default function App() {
     prevDevicesRef.current = devices;
   }, [devices, settings]);
 
-  // Theme Sync on body class
+  // Theme Sync on document element and localStorage
   useEffect(() => {
     const root = window.document.documentElement;
     if (theme === 'dark') {
       root.classList.add('dark');
+      document.body.classList.add('dark');
     } else {
       root.classList.remove('dark');
+      document.body.classList.remove('dark');
     }
+    localStorage.setItem('app_theme', theme);
   }, [theme]);
 
   // Handle detecting new devices to display immediate SysAdmin popup banners

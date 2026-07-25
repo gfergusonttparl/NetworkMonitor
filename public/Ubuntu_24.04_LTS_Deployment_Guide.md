@@ -15,10 +15,11 @@ This document provides complete, step-by-step technical instructions for deployi
 
 ### Architectural Overview
 - **Frontend**: React 18 SPA compiled with Vite & Tailwind CSS
-- **Backend Service**: Express.js REST API with automated background ping/SNMP sweep daemon
+- **Backend Service**: Express.js REST API with automated background ping/SNMP sweep daemon & deployed host IP discovery (`os.networkInterfaces()`)
 - **Process Manager**: `systemd` daemon unit
 - **Reverse Proxy**: Nginx (handling HTTP/HTTPS termination & WebSocket upgrading)
 - **Storage**: JSON file-backed database (`src/database.json`) with AES-256 encrypted credential vault
+- **Network Interface Auto-Scan**: "Scan Network Now" automatically detects the server's deployed IPv4 network interface address and sweeps the local host subnet bounds.
 
 ---
 

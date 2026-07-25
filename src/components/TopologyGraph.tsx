@@ -73,12 +73,23 @@ export default function TopologyGraph({
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [isLegendOpen, setIsLegendOpen] = useState<boolean>(false);
+
+  // Auto-close legend after 10 seconds when opened
+  useEffect(() => {
+    if (isLegendOpen) {
+      const timer = setTimeout(() => {
+        setIsLegendOpen(false);
+      }, 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [isLegendOpen]);
+
   const [contextMenu, setContextMenu] = useState<{
     device: Device;
     x: number;
     y: number;
   } | null>(null);
-  const [isLegendOpen, setIsLegendOpen] = useState(true);
 
   // Ping Diagnostic State
   const [pingingDevice, setPingingDevice] = useState<Device | null>(null);
@@ -942,24 +953,7 @@ export default function TopologyGraph({
         </div>
       </div>
 
-      <div id="canvas_legend" className="absolute bottom-4 left-4 z-10 flex flex-wrap gap-x-4 gap-y-2 bg-white/90 dark:bg-zinc-900/90 backdrop-blur border border-zinc-200 dark:border-zinc-800 p-3 rounded-lg text-xs shadow-sm">
-        <div className="flex items-center gap-1.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-500"></div>
-          <span className="text-zinc-600 dark:text-zinc-400">Online / Reachable</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-amber-500"></div>
-          <span className="text-zinc-600 dark:text-zinc-400">Sleep / Low Power</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-rose-500"></div>
-          <span className="text-zinc-600 dark:text-zinc-400">Offline / No Reply</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-yellow-400 animate-pulse"></div>
-          <span className="text-zinc-600 dark:text-zinc-400">New Device Sweep alert</span>
-        </div>
-      </div>
+
 
       {/* Interactive Main SVG Stage */}
       <svg
@@ -1293,21 +1287,22 @@ export default function TopologyGraph({
         id="topology_floating_legend"
         className="absolute bottom-4 left-4 z-20 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-lg transition-all duration-200 max-w-[280px]"
       >
-        <div className="flex items-center justify-between p-2.5 px-3 border-b border-zinc-100 dark:border-zinc-800/60">
-          <div className="flex items-center gap-1.5 font-bold text-xs text-zinc-900 dark:text-zinc-100">
-            <Info className="w-3.5 h-3.5 text-blue-500" />
-            <span>Topology Legend</span>
-          </div>
+        <div className="flex items-center justify-between p-2.5 px-3">
           <button
             id="btn_toggle_topology_legend"
             onClick={(e) => {
               e.stopPropagation();
               setIsLegendOpen(!isLegendOpen);
             }}
-            className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-md transition cursor-pointer"
-            title={isLegendOpen ? "Collapse legend" : "Expand legend"}
+            className="flex items-center gap-2 font-bold text-xs text-zinc-900 dark:text-zinc-100 hover:text-blue-600 dark:hover:text-blue-400 transition cursor-pointer"
           >
-            {isLegendOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            <Info className="w-3.5 h-3.5 text-blue-500" />
+            <span>Topology Legend</span>
+            {isLegendOpen ? (
+              <ChevronDown className="w-3.5 h-3.5 text-zinc-400 ml-1" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5 text-zinc-400 ml-1" />
+            )}
           </button>
         </div>
 
@@ -1317,12 +1312,14 @@ export default function TopologyGraph({
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
-              className="p-3 pt-2 text-[11px] space-y-2.5 overflow-hidden"
+              transition={{ duration: 0.18 }}
+              className="p-3 pt-1 text-[11px] space-y-2.5 overflow-hidden border-t border-zinc-100 dark:border-zinc-800/60"
             >
               {/* Device Statuses */}
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5">
-                  Device Statuses
+                <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5 flex items-center justify-between">
+                  <span>Device Statuses</span>
+                  <span className="text-[9px] font-normal text-zinc-400 italic">Closes in 10s</span>
                 </div>
                 <div className="grid grid-cols-2 gap-1.5 font-medium">
                   <div className="flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300">
@@ -1331,7 +1328,7 @@ export default function TopologyGraph({
                   </div>
                   <div className="flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300">
                     <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0 shadow-xs" />
-                    <span>Sleep Mode</span>
+                    <span>Sleep</span>
                   </div>
                   <div className="flex items-center gap-1.5 text-zinc-700 dark:text-zinc-300">
                     <span className="w-2.5 h-2.5 rounded-full bg-rose-500 shrink-0 shadow-xs" />
@@ -1344,7 +1341,7 @@ export default function TopologyGraph({
                 </div>
               </div>
 
-              {/* Link Types */}
+              {/* Link Connections */}
               <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800/60">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5">
                   Link Connections
@@ -1352,22 +1349,42 @@ export default function TopologyGraph({
                 <div className="space-y-1 text-zinc-600 dark:text-zinc-400 font-medium">
                   <div className="flex items-center gap-2">
                     <span className="w-6 h-1 rounded-full bg-gradient-to-r from-emerald-500 to-blue-500 shrink-0" />
-                    <span>Active Uplink Cable</span>
+                    <span>Active Uplink</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="w-6 h-1 rounded-full bg-amber-500/80 shrink-0" />
-                    <span>Standby / Sleep Link</span>
+                    <span>Standby Link</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="w-6 h-1 rounded-full bg-rose-500/80 shrink-0" />
-                    <span>Disconnected Link</span>
+                    <span>Offline Link</span>
                   </div>
                 </div>
               </div>
 
-              {/* Quick tip */}
-              <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800/60 text-[10px] text-zinc-400 italic">
-                💡 Right-click any node for Quick AI Analysis, Accept, or Reject!
+              {/* Device Roles & Icons */}
+              <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800/60">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5">
+                  Device Roles
+                </div>
+                <div className="grid grid-cols-2 gap-1 text-[10px] text-zinc-600 dark:text-zinc-400 font-medium">
+                  <div className="flex items-center gap-1">
+                    <Globe className="w-3 h-3 text-cyan-500" />
+                    <span>Gateway</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Shield className="w-3 h-3 text-indigo-500" />
+                    <span>Firewall</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Router className="w-3 h-3 text-blue-500" />
+                    <span>Switch</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Server className="w-3 h-3 text-emerald-500" />
+                    <span>Server</span>
+                  </div>
+                </div>
               </div>
             </motion.div>
           )}
