@@ -1,4 +1,4 @@
-export type DeviceType = 'computer' | 'printer' | 'switch' | 'router' | 'modem' | 'firewall' | 'scanner' | 'ap' | 'extender';
+export type DeviceType = 'computer' | 'printer' | 'switch' | 'unmanaged_switch' | 'hub' | 'router' | 'modem' | 'firewall' | 'scanner' | 'ap' | 'extender' | 'mobile' | 'phone' | 'tablet' | 'server';
 
 export type DeviceStatus = 'online' | 'offline' | 'sleep' | 'rejected';
 
@@ -7,22 +7,35 @@ export interface LatencyPoint {
   ms: number;
 }
 
+export interface NetworkShare {
+  name: string;
+  type: 'SMB' | 'NFS' | 'HTTP' | 'FTP' | 'IPC$';
+  access: 'Anonymous' | 'Authenticated' | 'Denied';
+  path?: string;
+  comments?: string;
+}
+
 export interface Device {
   id: string;
   ip: string;
   mac: string;
   vendor: string;
+  manufacturer?: string;
+  model?: string;
   name: string;
   deviceType: DeviceType;
   os: string;
   status: DeviceStatus;
   latency: number;
   latencyHistory: LatencyPoint[];
-  parentId: string | null; // connected to this device ID (e.g., switch, router, modem)
-  switchPort: number | null; // switch port number if parent is a switch
+  parentId: string | null; // connected to this device ID (e.g., switch, router, modem, hub)
+  switchPort: number | null; // switch port number if parent is a switch or hub
   lastSeen: string;
   isNew?: boolean; // temporary flag for flashing highlight
   notes?: string;
+  networkShares?: NetworkShare[];
+  credentialsStatus?: 'With Credentials' | 'Without Credentials' | 'None';
+  openPorts?: number[];
 }
 
 export interface Credential {

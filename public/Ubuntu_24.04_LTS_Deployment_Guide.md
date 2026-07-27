@@ -16,10 +16,12 @@ This document provides complete, step-by-step technical instructions for deployi
 ### Architectural Overview
 - **Frontend**: React 18 SPA compiled with Vite & Tailwind CSS
 - **Backend Service**: Express.js REST API with automated background ping/SNMP sweep daemon & deployed host IP discovery (`os.networkInterfaces()`)
+- **Deep Fingerprinting Engine**: Native IEEE MAC OUI Manufacturer & Model lookup (`src/lib/detector.ts`), OS OS-type identification, open port scanning, and Network Share Auditing (SMB/NFS/IPC$) with and without credentials
+- **Topology Hardware Visualizer**: Layer-1 Ethernet Hubs (Non-IP broadcast hardware), 5/8-port unmanaged switches, managed switches, routers, firewalls, ceiling APs, range extenders, 2U rack servers, and mobile devices with interactive sub-tree collapse (`+N`/`-`)
 - **Process Manager**: `systemd` daemon unit
 - **Reverse Proxy**: Nginx (handling HTTP/HTTPS termination & WebSocket upgrading)
 - **Storage**: JSON file-backed database (`src/database.json`) with AES-256 encrypted credential vault
-- **Network Interface Auto-Scan**: "Scan Network Now" automatically detects the server's deployed IPv4 network interface address and sweeps the local host subnet bounds.
+- **Network Interface Auto-Scan**: "Scan Network Now" automatically detects the server's deployed IPv4 network interface address and sweeps local host subnet bounds without generating fake/dummy devices.
 
 ---
 

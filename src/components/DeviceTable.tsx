@@ -57,6 +57,8 @@ interface DeviceTableProps {
   aiAnalysisResult?: string | null;
   onAcceptDevice?: (id: string) => Promise<void>;
   onRejectDevice?: (id: string) => Promise<void>;
+  onBulkAccept?: (ids: string[]) => Promise<void>;
+  onBulkReject?: (ids: string[]) => Promise<void>;
   onBulkDelete?: (ids: string[]) => Promise<void>;
   onBulkCategorize?: (ids: string[], deviceType: DeviceType) => Promise<void>;
 }
@@ -72,6 +74,8 @@ export default function DeviceTable({
   aiAnalysisResult = null,
   onAcceptDevice,
   onRejectDevice,
+  onBulkAccept,
+  onBulkReject,
   onBulkDelete,
   onBulkCategorize
 }: DeviceTableProps) {
@@ -318,6 +322,65 @@ export default function DeviceTable({
     }
   };
 
+  const triggerBulkAccept = async () => {
+    if (selectedIds.length === 0) return;
+    if (onBulkAccept) {
+      await onBulkAccept(selectedIds);
+      setSelectedIds([]);
+    } else {
+      try {
+        const res = await fetch('/api/devices/bulk/accept', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: selectedIds })
+        });
+        const data = await res.json();
+        if (data.success && onAcceptDevice) {
+          await onAcceptDevice(selectedIds[0]);
+        }
+      } catch (err) {
+        if (onAcceptDevice) {
+          for (const id of selectedIds) {
+            await onAcceptDevice(id);
+          }
+        }
+      }
+      setSelectedIds([]);
+    }
+  };
+
+  const triggerBulkReject = async () => {
+    if (selectedIds.length === 0) return;
+    if (onBulkReject) {
+      await onBulkReject(selectedIds);
+      setSelectedIds([]);
+    } else {
+      try {
+        const res = await fetch('/api/devices/bulk/reject', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: selectedIds })
+        });
+        const data = await res.json();
+        if (data.success && onRejectDevice) {
+          await onRejectDevice(selectedIds[0]);
+        }
+      } catch (err) {
+        if (onRejectDevice) {
+          for (const id of selectedIds) {
+            await onRejectDevice(id);
+          }
+        }
+      }
+      setSelectedIds([]);
+    }
+  };
+
+  const selectAllNewDevices = () => {
+    const newDeviceIds = devices.filter(d => d.isNew).map(d => d.id);
+    setSelectedIds(newDeviceIds);
+  };
+
   // Data grid pagination calculations
   const totalItems = sortedDevices.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
@@ -392,10 +455,18 @@ export default function DeviceTable({
 
     if (typeLower === 'switch') {
       return {
-        label: 'Switch',
+        label: 'Switch (Managed)',
         Icon: Network,
         color: 'text-blue-600 dark:text-blue-400',
         bg: 'bg-blue-50 dark:bg-blue-950/50 border-blue-200 dark:border-blue-900/60'
+      };
+    }
+    if (typeLower === 'unmanaged_switch' || nameLower.includes('unmanaged') || nameLower.includes('5-port') || nameLower.includes('8-port')) {
+      return {
+        label: 'Unmanaged Switch',
+        Icon: Network,
+        color: 'text-slate-600 dark:text-slate-300',
+        bg: 'bg-slate-100 dark:bg-slate-850 border-slate-300 dark:border-slate-700'
       };
     }
     if (typeLower === 'router') {
@@ -455,7 +526,40 @@ export default function DeviceTable({
       };
     }
 
-    // Specific Computer Sub-types (Server, Laptop, Mobile, Workstation)
+    // Specific Mobile & Tablet types
+    if (
+      typeLower === 'tablet' || 
+      nameLower.includes('ipad') || 
+      osLower.includes('ipad') || 
+      nameLower.includes('tablet')
+    ) {
+      return {
+        label: 'Tablet',
+        Icon: Tablet,
+        color: 'text-purple-600 dark:text-purple-400',
+        bg: 'bg-purple-50 dark:bg-purple-950/50 border-purple-200 dark:border-purple-900/60'
+      };
+    }
+
+    if (
+      typeLower === 'mobile' || 
+      typeLower === 'phone' || 
+      nameLower.includes('phone') || 
+      nameLower.includes('iphone') || 
+      nameLower.includes('android') || 
+      nameLower.includes('mobile') ||
+      osLower.includes('ios') ||
+      osLower.includes('android')
+    ) {
+      return {
+        label: 'Mobile Phone',
+        Icon: Smartphone,
+        color: 'text-pink-600 dark:text-pink-400',
+        bg: 'bg-pink-50 dark:bg-pink-950/50 border-pink-200 dark:border-pink-900/60'
+      };
+    }
+
+    // Specific Computer Sub-types (Server, Laptop, Workstation)
     if (nameLower.includes('server') || osLower.includes('server') || typeLower === 'server') {
       return {
         label: 'Server',
@@ -548,8 +652,18 @@ export default function DeviceTable({
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search by device name or IP address in real-time..."
-            className="w-full pl-9 pr-4 py-2 border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 text-sm rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            className="w-full pl-9 pr-8 py-2 border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 text-sm rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
           />
+          {searchTerm && (
+            <button
+              id="btn_clear_table_search"
+              onClick={() => setSearchTerm('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-full text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition"
+              title="Clear search"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
         <div id="filter_dropdowns" className="flex flex-wrap gap-2 items-center">
@@ -591,6 +705,18 @@ export default function DeviceTable({
               <option value="scanner">Scanners</option>
             </select>
           </div>
+
+          {devices.some(d => d.isNew) && (
+            <button
+              id="btn_select_all_new_devices"
+              onClick={selectAllNewDevices}
+              className="flex items-center gap-1.5 px-3 py-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-800 rounded-lg text-xs font-semibold transition cursor-pointer shadow-xs"
+              title="Select all unapproved newly detected devices"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Select Newly Detected ({devices.filter(d => d.isNew).length})</span>
+            </button>
+          )}
 
           <button
             id="btn_print_audit"
@@ -649,9 +775,13 @@ export default function DeviceTable({
                     onChange={(e) => setBulkCategoryChosen(e.target.value as DeviceType)}
                     className="bg-transparent border-none text-zinc-900 dark:text-zinc-100 font-semibold text-[11px] focus:outline-none focus:ring-0 ml-1 cursor-pointer py-1"
                   >
-                    <option value="computer">Computer</option>
+                    <option value="computer">Computer / Workstation</option>
+                    <option value="server">Server</option>
+                    <option value="mobile">Mobile Phone</option>
+                    <option value="tablet">Tablet</option>
                     <option value="router">Router</option>
-                    <option value="switch">Switch</option>
+                    <option value="switch">Managed Switch</option>
+                    <option value="unmanaged_switch">Unmanaged Switch</option>
                     <option value="ap">Access Point</option>
                     <option value="firewall">Firewall</option>
                     <option value="printer">Printer</option>
@@ -669,6 +799,28 @@ export default function DeviceTable({
                 </div>
 
                 <div className="h-4 w-[1px] bg-zinc-300 dark:bg-zinc-700 hidden sm:block"></div>
+
+                {/* Batch Accept / Approve */}
+                <button
+                  id="btn_bulk_accept"
+                  onClick={triggerBulkAccept}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-[11px] transition cursor-pointer shadow-xs"
+                  title="Approve selected newly detected devices"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Accept Selected ({selectedIds.length})</span>
+                </button>
+
+                {/* Batch Reject */}
+                <button
+                  id="btn_bulk_reject"
+                  onClick={triggerBulkReject}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-[11px] transition cursor-pointer shadow-xs"
+                  title="Reject selected devices"
+                >
+                  <Ban className="w-3.5 h-3.5" />
+                  <span>Reject Selected ({selectedIds.length})</span>
+                </button>
 
                 {/* Batch Delete */}
                 <button
@@ -749,12 +901,13 @@ export default function DeviceTable({
                   </td>
                 </tr>
               ) : (
-                paginatedDevices.map((device) => {
+                paginatedDevices.map((device, index) => {
                   const isEditing = editingDeviceId === device.id;
                   const isSelected = selectedIds.includes(device.id);
                   const isExpanded = expandedRowIds.includes(device.id);
                   const typeInfo = getDeviceTypeInfo(device.deviceType, device.name, device.os);
                   const TypeIcon = typeInfo.Icon;
+                  const isEven = index % 2 === 0;
                   
                   return (
                     <React.Fragment key={device.id}>
@@ -766,9 +919,11 @@ export default function DeviceTable({
                             toggleRowExpand(device.id);
                           }
                         }}
-                        className={`hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition-all duration-200 cursor-pointer ${
+                        className={`transition-all duration-200 cursor-pointer ${
+                          isEven ? 'bg-white dark:bg-zinc-900' : 'bg-zinc-50/70 dark:bg-zinc-800/25'
+                        } hover:bg-zinc-100/80 dark:hover:bg-zinc-800/60 ${
                           device.isNew ? 'bg-yellow-500/10 dark:bg-yellow-500/5 font-medium' : ''
-                        } ${isSelected ? 'bg-blue-50/40 dark:bg-blue-950/10' : ''} ${isExpanded ? 'bg-zinc-50/60 dark:bg-zinc-800/30 font-medium' : ''}`}
+                        } ${isSelected ? '!bg-blue-50/60 dark:!bg-blue-950/30' : ''} ${isExpanded ? '!bg-blue-50/20 dark:!bg-zinc-800/40 font-medium' : ''}`}
                       >
                         {/* Expand / Collapse Button Column */}
                         <td className="p-4 text-center w-8">
@@ -838,9 +993,13 @@ export default function DeviceTable({
                               onChange={(e) => setEditType(e.target.value as DeviceType)}
                               className="w-full px-2 py-1 bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none"
                             >
-                              <option value="computer">Computer / Laptop / Mobile / Server</option>
+                              <option value="computer">Computer / Workstation</option>
+                              <option value="server">Server</option>
+                              <option value="mobile">Mobile Phone</option>
+                              <option value="tablet">Tablet</option>
                               <option value="router">Router</option>
-                              <option value="switch">Switch</option>
+                              <option value="switch">Managed Switch</option>
+                              <option value="unmanaged_switch">Unmanaged Switch</option>
                               <option value="ap">Access Point</option>
                               <option value="firewall">Firewall</option>
                               <option value="printer">Printer</option>

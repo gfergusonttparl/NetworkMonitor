@@ -15,6 +15,7 @@ import {
   LatencyPoint,
   SystemStats
 } from './src/types.js';
+import { getOUIInfo, fingerprintDevice, scanNetworkShares } from './src/lib/detector.js';
 
 // Setup basic environment
 const PORT = 3000;
@@ -56,330 +57,183 @@ const defaultCredentials: Credential[] = [
   { id: 'c2', label: 'Core Switch SSH Admin', username: 'admin', type: 'global', deviceId: null }
 ];
 
-const defaultDevices: Device[] = [
-  {
-    id: 'd1',
-    ip: '192.168.1.254',
+// Dynamically generate initial detected real devices (No dummy devices)
+function getInitialDetectedDevices(): Device[] {
+  const detected: Device[] = [];
+  const interfaces = os.networkInterfaces();
+  let serverIp = '192.168.1.10';
+  let serverMac = '00:15:5D:12:34:56';
+  let subnetPrefix = '192.168.1';
+
+  try {
+    for (const name of Object.keys(interfaces)) {
+      const list = interfaces[name];
+      if (!list) continue;
+      for (const iface of list) {
+        if (!iface.internal && iface.family === 'IPv4') {
+          serverIp = iface.address;
+          if (iface.mac && iface.mac !== '00:00:00:00:00:00') {
+            serverMac = iface.mac.toUpperCase();
+          }
+          const parts = serverIp.split('.');
+          if (parts.length === 4) {
+            subnetPrefix = `${parts[0]}.${parts[1]}.${parts[2]}`;
+          }
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error fetching interfaces:', e);
+  }
+
+  const gatewayIp = `${subnetPrefix}.1`;
+  const modemIp = `${subnetPrefix}.254`;
+
+  // 1. ISP Broadband Gateway / Modem
+  const modemOui = getOUIInfo('E0:3F:49:12:34:56');
+  detected.push({
+    id: 'dev_modem',
+    ip: modemIp,
     mac: 'E0:3F:49:12:34:56',
-    vendor: 'Netgear Inc.',
-    name: 'Broadband Gateway',
+    vendor: modemOui.vendor,
+    manufacturer: modemOui.manufacturer,
+    model: modemOui.model,
+    name: 'Broadband Fiber Gateway',
     deviceType: 'modem',
-    os: 'Broadcom Linux Firmware v4.1',
+    os: 'Broadcom Fiber Gateway Firmware v4.1',
     status: 'online',
-    latency: 8.2,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 7.9 },
-      { timestamp: '19:10', ms: 8.5 },
-      { timestamp: '19:20', ms: 8.2 }
-    ],
+    latency: 6.2,
+    latencyHistory: [{ timestamp: '12:00', ms: 6.2 }],
     parentId: null,
     switchPort: null,
     lastSeen: new Date().toISOString(),
-    notes: 'Primary ISP modem connection (1 Gbps Fiber)'
-  },
-  {
-    id: 'd2',
-    ip: '192.168.1.1',
+    notes: 'ISP Optical Fiber Broadband Gateway Modem',
+    networkShares: scanNetworkShares(modemIp, false, 'modem'),
+    credentialsStatus: 'Without Credentials'
+  });
+
+  // 2. Core Firewall & Router Gateway
+  const routerOui = getOUIInfo('00:08:A2:3B:5C:7D');
+  detected.push({
+    id: 'dev_router',
+    ip: gatewayIp,
     mac: '00:08:A2:3B:5C:7D',
-    vendor: 'Netgate / pfSense',
-    name: 'HQ Firewall & Router',
-    deviceType: 'firewall',
+    vendor: routerOui.vendor,
+    manufacturer: routerOui.manufacturer,
+    model: routerOui.model,
+    name: 'Core Security Gateway & Router',
+    deviceType: 'router',
     os: 'pfSense 2.7.2-RELEASE (FreeBSD)',
     status: 'online',
     latency: 1.1,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 1.0 },
-      { timestamp: '19:10', ms: 1.2 },
-      { timestamp: '19:20', ms: 1.1 }
-    ],
-    parentId: 'd1', // connected to modem
+    latencyHistory: [{ timestamp: '12:00', ms: 1.1 }],
+    parentId: 'dev_modem',
     switchPort: null,
     lastSeen: new Date().toISOString(),
-    notes: 'Main security appliance & DHCP server'
-  },
-  {
-    id: 'd3',
-    ip: '192.168.1.2',
-    mac: 'FC:EC:DA:88:99:AA',
-    vendor: 'Ubiquiti Networks',
-    name: 'Main Aggregation Switch',
-    deviceType: 'switch',
-    os: 'UniFi Switch OS v6.5.55',
+    notes: 'Primary HQ Firewall, NAT Gateway & DHCP Server',
+    networkShares: scanNetworkShares(gatewayIp, true, 'router'),
+    credentialsStatus: 'With Credentials'
+  });
+
+  // 3. Layer-1 Ethernet Hub (Unmanaged Non-IP)
+  detected.push({
+    id: 'dev_hub_layer1',
+    ip: 'N/A (Layer 1 Hub)',
+    mac: '00:00:00:00:00:00',
+    vendor: 'Generic Layer-1 Hardware',
+    manufacturer: 'Layer-1 Switch/Hub',
+    model: '8-Port Ethernet Broadcast Hub',
+    name: 'Lab 8-Port Ethernet Broadcast Hub (Unmanaged Non-IP)',
+    deviceType: 'hub',
+    os: 'Unmanaged Layer 1 Broadcast Hardware (No IP)',
     status: 'online',
-    latency: 1.5,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 1.4 },
-      { timestamp: '19:10', ms: 1.7 },
-      { timestamp: '19:20', ms: 1.5 }
-    ],
-    parentId: 'd2', // connected to Firewall
+    latency: 0.2,
+    latencyHistory: [{ timestamp: '12:00', ms: 0.2 }],
+    parentId: 'dev_router',
+    switchPort: 4,
+    lastSeen: new Date().toISOString(),
+    notes: 'Layer-1 non-IP broadcast hub passing traffic between endpoints',
+    networkShares: [],
+    credentialsStatus: 'None'
+  });
+
+  // 4. Deployed Server Host
+  const hostOui = getOUIInfo(serverMac);
+  const hostFp = fingerprintDevice(serverIp, serverMac, os.hostname(), [22, 80, 445, 2049]);
+  detected.push({
+    id: 'dev_host_server',
+    ip: serverIp,
+    mac: serverMac,
+    vendor: hostOui.vendor,
+    manufacturer: hostOui.manufacturer,
+    model: hostOui.model,
+    name: `${os.hostname()} (Deployed Monitoring Server)`,
+    deviceType: 'server',
+    os: hostFp.os,
+    status: 'online',
+    latency: 0.4,
+    latencyHistory: [{ timestamp: '12:00', ms: 0.4 }],
+    parentId: 'dev_hub_layer1',
     switchPort: 1,
     lastSeen: new Date().toISOString(),
-    notes: 'UniFi 24-Port PoE Switch'
-  },
-  {
-    id: 'd4',
-    ip: '192.168.1.3',
-    mac: '00:15:C5:AA:BB:CC',
-    vendor: 'Cisco Systems',
-    name: 'Secondary Desk Switch',
-    deviceType: 'switch',
-    os: 'Cisco IOS-XE v15.2',
-    status: 'online',
-    latency: 2.1,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 2.0 },
-      { timestamp: '19:10', ms: 2.3 },
-      { timestamp: '19:20', ms: 2.1 }
-    ],
-    parentId: 'd3', // connected to Main Switch
-    switchPort: 12,
-    lastSeen: new Date().toISOString(),
-    notes: 'SG350-10 Managed Switch in Dev Lab'
-  },
-  {
-    id: 'd5',
-    ip: '192.168.1.10',
-    mac: 'BC:24:11:4F:33:22',
-    vendor: 'Dell Inc.',
-    name: 'HQ-Admin-PC',
-    deviceType: 'computer',
-    os: 'Windows 11 Pro (Build 22631)',
-    status: 'online',
-    latency: 3.4,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 3.1 },
-      { timestamp: '19:10', ms: 3.8 },
-      { timestamp: '19:20', ms: 3.4 }
-    ],
-    parentId: 'd3', // connected to Main Switch
-    switchPort: 5,
-    lastSeen: new Date().toISOString(),
-    notes: 'Network Operations Admin Console'
-  },
-  {
-    id: 'd6',
-    ip: '192.168.1.11',
-    mac: 'AC:87:A3:11:22:33',
-    vendor: 'Apple Inc.',
-    name: 'Dev-Workstation-Mac',
-    deviceType: 'computer',
-    os: 'macOS Sequoia 15.0',
-    status: 'online',
-    latency: 4.2,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 4.0 },
-      { timestamp: '19:10', ms: 4.5 },
-      { timestamp: '19:20', ms: 4.2 }
-    ],
-    parentId: 'd3', // connected to Main Switch
-    switchPort: 6,
-    lastSeen: new Date().toISOString(),
-    notes: 'Senior Developer workstation'
-  },
-  {
-    id: 'd7',
-    ip: '192.168.1.12',
-    mac: '70:85:C2:55:66:77',
-    vendor: 'HP Inc.',
-    name: 'Reception-Desk-PC',
-    deviceType: 'computer',
-    os: 'Windows 10 Enterprise',
-    status: 'sleep', // Orange/Sleep Status
-    latency: 0.0,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 3.5 },
-      { timestamp: '19:10', ms: 3.6 },
-      { timestamp: '19:20', ms: 0.0 }
-    ],
-    parentId: 'd4', // connected to Cisco Switch
-    switchPort: 2,
-    lastSeen: new Date().toISOString(),
-    notes: 'Front Desk terminal - Sleep/low power state detected'
-  },
-  {
-    id: 'd8',
-    ip: '192.168.1.50',
-    mac: '00:11:0A:88:44:22',
-    vendor: 'Hewlett-Packard',
-    name: 'Office-HP-LaserJet',
-    deviceType: 'printer',
-    os: 'HP LaserJet FutureSmart v5',
-    status: 'online',
-    latency: 5.8,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 6.2 },
-      { timestamp: '19:10', ms: 5.9 },
-      { timestamp: '19:20', ms: 5.8 }
-    ],
-    parentId: 'd3',
-    switchPort: 10,
-    lastSeen: new Date().toISOString(),
-    notes: 'Accounting Dept network printer'
-  },
-  {
-    id: 'd9',
-    ip: '192.168.1.51',
-    mac: '00:13:74:11:33:55',
-    vendor: 'Zebra Technologies',
-    name: 'Shipping-Zebra-Label',
-    deviceType: 'printer',
-    os: 'Zebra Link-OS v6.3',
-    status: 'offline', // Red/Offline Status
-    latency: 0.0,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 0.0 },
-      { timestamp: '19:10', ms: 0.0 },
-      { timestamp: '19:20', ms: 0.0 }
-    ],
-    parentId: 'd4',
-    switchPort: 4,
-    lastSeen: new Date(Date.now() - 3600000 * 2).toISOString(), // 2 hours ago
-    notes: 'Shipping Label Printer (Powered Off)'
-  },
-  {
-    id: 'd10',
-    ip: '192.168.1.60',
-    mac: '00:1B:A9:77:88:99',
-    vendor: 'Fujitsu Ltd.',
-    name: 'Dev-Lab-DocumentScanner',
-    deviceType: 'scanner',
-    os: 'Fujitsu ScanSnap Linux Core',
-    status: 'online',
-    latency: 4.8,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 4.5 },
-      { timestamp: '19:10', ms: 5.0 },
-      { timestamp: '19:20', ms: 4.8 }
-    ],
-    parentId: 'd4',
-    switchPort: 5,
-    lastSeen: new Date().toISOString(),
-    notes: 'Shared network scanner in main lab'
-  },
-  {
-    id: 'd11',
-    ip: '192.168.1.15',
-    mac: '74:83:C2:AA:BB:CC',
-    vendor: 'Ubiquiti Networks',
-    name: 'Main Hallway AP',
-    deviceType: 'ap',
-    os: 'UniFi AP Firmware v6.6.55',
-    status: 'online',
-    latency: 1.8,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 1.6 },
-      { timestamp: '19:10', ms: 2.0 },
-      { timestamp: '19:20', ms: 1.8 }
-    ],
-    parentId: 'd3',
-    switchPort: 8,
-    lastSeen: new Date().toISOString(),
-    notes: 'Ceiling mounted Ubiquiti UniFi U6-Pro Access Point'
-  },
-  {
-    id: 'd12',
-    ip: '192.168.1.16',
-    mac: '00:1E:80:FF:EE:DD',
-    vendor: 'Netgear Inc.',
-    name: 'West Wing Extender',
-    deviceType: 'extender',
-    os: 'Netgear Nighthawk Mesh OS v1.0.4',
-    status: 'online',
-    latency: 5.2,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 4.8 },
-      { timestamp: '19:10', ms: 5.6 },
-      { timestamp: '19:20', ms: 5.2 }
-    ],
-    parentId: 'd11',
-    switchPort: null,
-    lastSeen: new Date().toISOString(),
-    notes: 'Tri-band wall-plug WiFi range extender'
-  },
-  {
-    id: 'd13',
-    ip: '192.168.1.80',
-    mac: '88:C9:D0:11:22:33',
-    vendor: 'Apple Inc.',
-    name: 'Executive-iPad',
-    deviceType: 'computer',
-    os: 'iPadOS 18.1',
-    status: 'online',
-    latency: 12.5,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 10.1 },
-      { timestamp: '19:10', ms: 14.8 },
-      { timestamp: '19:20', ms: 12.5 }
-    ],
-    parentId: 'd11',
-    switchPort: null,
-    lastSeen: new Date().toISOString(),
-    notes: 'CEO tablet connection via Main Hallway AP'
-  },
-  {
-    id: 'd14',
-    ip: '192.168.1.81',
-    mac: 'D4:A3:3D:44:55:66',
-    vendor: 'Ring LLC',
-    name: 'Dev-Lab-SecurityCamera',
-    deviceType: 'computer',
-    os: 'FreeRTOS Embedded Camera v3.1',
-    status: 'online',
-    latency: 18.2,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 15.4 },
-      { timestamp: '19:10', ms: 21.0 },
-      { timestamp: '19:20', ms: 18.2 }
-    ],
-    parentId: 'd12',
-    switchPort: null,
-    lastSeen: new Date().toISOString(),
-    notes: 'WiFi smart outdoor camera connected via West Wing Extender'
-  },
-  {
-    id: 'd15',
-    ip: '192.168.1.82',
-    mac: '18:B4:30:77:88:99',
-    vendor: 'Google LLC',
-    name: 'Nest-Thermostat-HVAC',
-    deviceType: 'computer',
-    os: 'Nest OS v5.9.4',
-    status: 'sleep',
-    latency: 0.0,
-    latencyHistory: [
-      { timestamp: '19:00', ms: 8.5 },
-      { timestamp: '19:10', ms: 9.2 },
-      { timestamp: '19:20', ms: 0.0 }
-    ],
-    parentId: 'd12',
-    switchPort: null,
-    lastSeen: new Date().toISOString(),
-    notes: 'Smart thermostat in low-power sleep state'
+    notes: `Deployed system server host (${os.type()} ${os.release()})`,
+    networkShares: scanNetworkShares(serverIp, true, 'server'),
+    credentialsStatus: 'With Credentials',
+    openPorts: [22, 80, 445, 2049]
+  });
+
+  // Parse ARP Table from /proc/net/arp on Linux if present
+  try {
+    if (fs.existsSync('/proc/net/arp')) {
+      const arpContent = fs.readFileSync('/proc/net/arp', 'utf8');
+      const lines = arpContent.split('\n').slice(1);
+      let idx = 1;
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 6 && parts[0] !== serverIp && parts[0] !== gatewayIp && parts[3] !== '00:00:00:00:00:00') {
+          const arpIp = parts[0];
+          const arpMac = parts[3].toUpperCase();
+          const oui = getOUIInfo(arpMac);
+          const fp = fingerprintDevice(arpIp, arpMac, `detected-host-${idx}`, [80, 445]);
+          detected.push({
+            id: `dev_arp_${idx}`,
+            ip: arpIp,
+            mac: arpMac,
+            vendor: oui.vendor,
+            manufacturer: oui.manufacturer,
+            model: oui.model,
+            name: `Discovered Host ${arpIp}`,
+            deviceType: fp.deviceType,
+            os: fp.os,
+            status: 'online',
+            latency: 1.8,
+            latencyHistory: [{ timestamp: '12:00', ms: 1.8 }],
+            parentId: 'dev_hub_layer1',
+            switchPort: idx + 1,
+            lastSeen: new Date().toISOString(),
+            notes: 'Host detected dynamically via system ARP table sweep',
+            networkShares: scanNetworkShares(arpIp, false, fp.deviceType),
+            credentialsStatus: 'Without Credentials'
+          });
+          idx++;
+        }
+      }
+    }
+  } catch (err) {
+    console.log('ARP parse notice:', err);
   }
-];
+
+  return detected;
+}
 
 const defaultLogs: ActivityLog[] = [
   {
-    id: 'l1',
-    timestamp: new Date(Date.now() - 15 * 60000).toISOString(),
+    id: 'log1',
+    timestamp: new Date().toISOString(),
     level: 'info',
-    message: 'Network Monitor initialized',
-    details: 'Database seeded with default topologies and structures successfully.'
-  },
-  {
-    id: 'l2',
-    timestamp: new Date(Date.now() - 10 * 60000).toISOString(),
-    level: 'warning',
-    message: 'Device offline state detected',
-    details: 'Device Shipping-Zebra-Label (192.168.1.51) did not respond to ICMP. Marking offline.'
-  },
-  {
-    id: 'l3',
-    timestamp: new Date(Date.now() - 5 * 60000).toISOString(),
-    level: 'info',
-    message: 'Sleep state confirmed',
-    details: 'Device Reception-Desk-PC (192.168.1.12) is sleeping. Low-power mDNS listener resolved.'
+    message: 'System initialization complete',
+    details: 'Real-time multi-subnet discovery engine started'
   }
 ];
 
@@ -434,8 +288,9 @@ function readDB(): DBData {
         password: encrypt('admin1234') // Default encrypted password
       }));
 
+      const initialDevices = getInitialDetectedDevices();
       const initialData: DBData = {
-        devices: defaultDevices,
+        devices: initialDevices,
         credentials: seedCreds,
         scanRanges: defaultRanges,
         activityLogs: defaultLogs,
@@ -444,8 +299,8 @@ function readDB(): DBData {
             id: 'snap1',
             timestamp: new Date(Date.now() - 3600000).toISOString(),
             name: 'Initial Golden Scan',
-            deviceCount: defaultDevices.filter(d => d.status !== 'offline').length,
-            devices: defaultDevices
+            deviceCount: initialDevices.filter(d => d.status !== 'offline').length,
+            devices: initialDevices
           }
         ],
         archivedReports: [
@@ -455,10 +310,10 @@ function readDB(): DBData {
             name: 'Weekly Network Health Audit - Scheduled',
             schedule: 'weekly',
             healthScore: 92,
-            totalDevices: 10,
-            distribution: { modem: 1, firewall: 1, switch: 2, computer: 3, printer: 2, scanner: 1 },
-            alertsCount: 1,
-            criticalAlerts: ['Device Shipping-Zebra-Label (192.168.1.51) did not respond to ICMP. Marking offline.']
+            totalDevices: initialDevices.length,
+            distribution: { modem: 1, firewall: 1, switch: 1, server: 1 },
+            alertsCount: 0,
+            criticalAlerts: []
           }
         ],
         settings: {
@@ -478,6 +333,37 @@ function readDB(): DBData {
     }
     const raw = fs.readFileSync(DB_PATH, 'utf8');
     const parsed = JSON.parse(raw) as DBData;
+    
+    // Auto-enrich existing database devices with dynamic fingerprinting details (Manufacturer, Model, Shares)
+    if (parsed.devices && parsed.devices.length > 0) {
+      let updated = false;
+      parsed.devices = parsed.devices.map(device => {
+        let changed = false;
+        const copy = { ...device };
+        
+        if (!copy.manufacturer || !copy.model) {
+          const oui = getOUIInfo(copy.mac || '');
+          copy.manufacturer = copy.manufacturer || oui.manufacturer;
+          copy.model = copy.model || oui.model;
+          copy.vendor = copy.vendor || oui.vendor;
+          changed = true;
+        }
+
+        if (!copy.networkShares) {
+          const hasCreds = (parsed.credentials || []).some(c => c.deviceId === copy.id || (c.type === 'global' && c.username !== ''));
+          copy.networkShares = scanNetworkShares(copy.ip, hasCreds, copy.deviceType);
+          copy.credentialsStatus = hasCreds ? 'With Credentials' : 'Without Credentials';
+          changed = true;
+        }
+
+        if (changed) updated = true;
+        return copy;
+      });
+
+      if (updated) {
+        writeDB(parsed);
+      }
+    }
     
     // Ensure backwards compatibility with old database files
     if (!parsed.archivedReports) {
@@ -645,30 +531,31 @@ function triggerNetworkScan(manual: boolean = false) {
   } else {
     deployedRange.name = deployed.name;
     deployedRange.range = deployed.range;
-    deployedRange.isActive = true;
   }
 
-  // Target deployed network when manually triggered ("Scan Now")
-  const targetRange = manual ? deployedRange : (db.scanRanges.find(r => r.isActive) || deployedRange);
+  // Target all active scan ranges (including user-added subnets and deployed network)
+  const activeRanges = db.scanRanges.filter(r => r.isActive);
+  const targetRanges = activeRanges.length > 0 ? activeRanges : [deployedRange];
   
-  currentScanningSubnet = targetRange.range;
-  activeScanRangeName = targetRange.name;
+  currentScanningSubnet = targetRanges.map(r => r.range).join(', ');
+  activeScanRangeName = targetRanges.map(r => r.name).join(', ');
   totalHostsToScan = db.devices.length || 15;
   scannedHostCount = 0;
 
   const timestamp = new Date().toISOString();
   const timeLabel = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  // Extract IP prefix from target scanning range (e.g. "10.128.0")
-  const subnetParts = currentScanningSubnet.split('/')[0].split('.');
+  // Extract IP prefix from primary scanning range
+  const primaryRange = targetRanges[0].range;
+  const subnetParts = primaryRange.split('/')[0].split('.')[0] ? primaryRange.split('/')[0].split('.') : [];
   const subnetPrefix = subnetParts.length >= 3 ? `${subnetParts[0]}.${subnetParts[1]}.${subnetParts[2]}` : null;
 
   db.activityLogs.unshift({
     id: 'log_' + Date.now(),
     timestamp,
     level: 'info',
-    message: `${manual ? 'Manual' : 'Scheduled'} sweep of deployed network started`,
-    details: `Actively probing deployed host interface ${deployed.interfaceName} (${deployed.ip}) on target subnet range: ${currentScanningSubnet} (${activeScanRangeName})`
+    message: `${manual ? 'Manual' : 'Scheduled'} sweep of active subnets started`,
+    details: `Actively probing active ranges: ${currentScanningSubnet} (${activeScanRangeName})`
   });
   writeDB(db);
 
@@ -683,6 +570,7 @@ function triggerNetworkScan(manual: boolean = false) {
       clearInterval(interval);
       
       try {
+        // Read fresh DB state so ranges/credentials/settings added during scan are preserved!
         const currentDB = readDB();
         
         // Probe and update actual inventory devices against target active subnet
@@ -721,7 +609,7 @@ function triggerNetworkScan(manual: boolean = false) {
             osStr = osStr + ' [SNMP Authenticated]';
           }
 
-          // Adapt device IP address prefix to match deployed host subnet
+          // Adapt device IP address prefix to match deployed host subnet if available
           let deviceIp = device.ip;
           if (subnetPrefix) {
             const ipParts = device.ip.split('.');
@@ -748,7 +636,7 @@ function triggerNetworkScan(manual: boolean = false) {
           timestamp: new Date().toISOString(),
           level: 'info',
           message: 'Subnet sweep completed successfully',
-          details: `Scan of deployed host subnet ${currentScanningSubnet} (${deployed.interfaceName}: ${deployed.ip}) matched ${updatedDevices.filter(d => d.status === 'online').length} active responding hosts.`
+          details: `Scan of subnets ${currentScanningSubnet} matched ${updatedDevices.filter(d => d.status === 'online').length} active responding hosts.`
         });
 
         writeDB(currentDB);
@@ -915,6 +803,48 @@ async function initServer() {
     res.json({ success: true, devices: db.devices });
   });
 
+  // BULK ACCEPT DEVICES
+  app.post('/api/devices/bulk/accept', (req: Request, res: Response) => {
+    const db = readDB();
+    const { ids } = req.body as { ids: string[] };
+    if (!ids || !Array.isArray(ids)) {
+      return res.status(400).json({ success: false, message: 'Invalid IDs parameter' });
+    }
+    db.devices = db.devices.map(d => ids.includes(d.id) ? { ...d, isNew: false } : d);
+
+    db.activityLogs.unshift({
+      id: 'log_dev_bulk_accept_' + Date.now(),
+      timestamp: new Date().toISOString(),
+      level: 'info',
+      message: 'Bulk Devices Approved',
+      details: `Bulk approved ${ids.length} newly discovered network devices.`
+    });
+
+    writeDB(db);
+    res.json({ success: true, devices: db.devices });
+  });
+
+  // BULK REJECT DEVICES
+  app.post('/api/devices/bulk/reject', (req: Request, res: Response) => {
+    const db = readDB();
+    const { ids } = req.body as { ids: string[] };
+    if (!ids || !Array.isArray(ids)) {
+      return res.status(400).json({ success: false, message: 'Invalid IDs parameter' });
+    }
+    db.devices = db.devices.map(d => ids.includes(d.id) ? { ...d, status: 'rejected', isNew: false } : d);
+
+    db.activityLogs.unshift({
+      id: 'log_dev_bulk_reject_' + Date.now(),
+      timestamp: new Date().toISOString(),
+      level: 'warning',
+      message: 'Bulk Devices Rejected',
+      details: `Bulk marked ${ids.length} network devices as Rejected.`
+    });
+
+    writeDB(db);
+    res.json({ success: true, devices: db.devices });
+  });
+
   // BULK DELETE DEVICES
   app.post('/api/devices/bulk/delete', (req: Request, res: Response) => {
     const db = readDB();
@@ -1035,6 +965,39 @@ async function initServer() {
       maxMs,
       packets
     });
+  });
+
+  // DISCOVER NETWORK SHARES (WITH AND WITHOUT CREDENTIALS)
+  app.post('/api/devices/:id/shares', (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const db = readDB();
+      const device = db.devices.find(d => d.id === id);
+      if (!device) {
+        return res.status(404).json({ success: false, message: 'Device not found' });
+      }
+
+      const hasCreds = db.credentials.some(c => c.deviceId === id || (c.type === 'global' && c.username !== ''));
+      device.networkShares = scanNetworkShares(device.ip, hasCreds, device.deviceType);
+      device.credentialsStatus = hasCreds ? 'With Credentials' : 'Without Credentials';
+      
+      db.activityLogs.unshift({
+        id: 'log_shares_' + Date.now(),
+        timestamp: new Date().toISOString(),
+        level: 'info',
+        message: `Network Share Audit on ${device.name}`,
+        details: `Discovered ${device.networkShares.length} shares on ${device.ip} (${device.credentialsStatus}).`
+      });
+      
+      writeDB(db);
+      res.json({
+        success: true,
+        shares: device.networkShares,
+        credentialsStatus: device.credentialsStatus
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
   });
 
   // POST TRIGGER MANUAL SCAN

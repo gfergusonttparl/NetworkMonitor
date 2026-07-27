@@ -456,6 +456,42 @@ export default function App() {
     }
   };
 
+  const bulkAcceptDevices = async (ids: string[]) => {
+    try {
+      const res = await fetch('/api/devices/bulk/accept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDevices(data.devices);
+        fetchLogsOnly();
+        fetchStats();
+      }
+    } catch (err) {
+      console.error('Error bulk accepting devices:', err);
+    }
+  };
+
+  const bulkRejectDevices = async (ids: string[]) => {
+    try {
+      const res = await fetch('/api/devices/bulk/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDevices(data.devices);
+        fetchLogsOnly();
+        fetchStats();
+      }
+    } catch (err) {
+      console.error('Error bulk rejecting devices:', err);
+    }
+  };
+
   // Range Actions
   const handleAddRange = async (range: Partial<ScanRange>) => {
     try {
@@ -764,31 +800,30 @@ export default function App() {
               {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
             </button>
 
-            {/* Ubuntu Deployment Guide Download button */}
+            {/* Ubuntu Deployment Guide Download Icon Button */}
             <a
               id="btn_download_ubuntu_guide"
               href="/api/download/ubuntu-guide"
               download="Ubuntu_24.04_LTS_Deployment_Guide.md"
-              className="px-3 py-2 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 rounded-xl font-bold text-xs flex items-center gap-1.5 transition"
-              title="Download Ubuntu 24.04 LTS Server Deployment Guide"
+              className="p-2.5 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 rounded-xl transition flex items-center justify-center cursor-pointer shadow-xs"
+              title="Download Ubuntu 24.04 LTS Server Deployment Guide (.md)"
             >
-              <Download className="w-3.5 h-3.5 text-emerald-500" />
-              <span className="hidden md:inline">Ubuntu Deployment Guide</span>
+              <Download className="w-4 h-4 text-emerald-500" />
             </a>
 
-            {/* Sweep Control button */}
+            {/* Sweep Control Icon Button */}
             <button
               id="btn_trigger_sweep_header"
               onClick={triggerScan}
               disabled={isScanning}
-              className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-md transition-all duration-300 ${
+              className={`p-2.5 rounded-xl transition-all duration-300 flex items-center justify-center shadow-md cursor-pointer ${
                 isScanning 
                   ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed' 
                   : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/10'
               }`}
+              title={isScanning ? "Sweeping IP Network Subnet..." : "Scan Network Now (Trigger Subnet Sweep)"}
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
-              <span>{isScanning ? 'Sweeping IP Range...' : 'Scan Network Now'}</span>
+              <RefreshCw className={`w-4 h-4 ${isScanning ? 'animate-spin text-blue-500 dark:text-blue-400' : 'text-white'}`} />
             </button>
 
             {/* Authentication Admin login indicator */}
@@ -1032,6 +1067,7 @@ export default function App() {
                   onUpdateDevice={updateDevice}
                   onAcceptDevice={acceptDevice}
                   onRejectDevice={rejectDevice}
+                  isScanning={isScanning}
                 />
               ) : (
                 <DeviceTable
@@ -1045,6 +1081,8 @@ export default function App() {
                   aiAnalysisResult={aiAnalysisResult}
                   onAcceptDevice={acceptDevice}
                   onRejectDevice={rejectDevice}
+                  onBulkAccept={bulkAcceptDevices}
+                  onBulkReject={bulkRejectDevices}
                   onBulkDelete={bulkDeleteDevices}
                   onBulkCategorize={bulkCategorizeDevices}
                 />

@@ -24,6 +24,8 @@ import {
   Laptop,
   Wifi,
   Radio,
+  Smartphone,
+  Tablet,
   Filter,
   Search
 } from 'lucide-react';
@@ -39,6 +41,18 @@ interface TopologyGraphProps {
   onUpdateDevice?: (updated: Device) => Promise<void>;
   onAcceptDevice?: (id: string) => Promise<void>;
   onRejectDevice?: (id: string) => Promise<void>;
+  isScanning?: boolean;
+}
+
+export interface ClusterHull {
+  id: string;
+  title: string;
+  subtitle: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  count: number;
 }
 
 interface NodePosition {
@@ -59,10 +73,13 @@ export default function TopologyGraph({
   aiAnalysisResult = null,
   onUpdateDevice,
   onAcceptDevice,
-  onRejectDevice
+  onRejectDevice,
+  isScanning = false
 }: TopologyGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [positions, setPositions] = useState<Record<string, NodePosition>>({});
+  const [clusterMode, setClusterMode] = useState<'none' | 'subnet' | 'parent'>('none');
+  const [clusterHulls, setClusterHulls] = useState<ClusterHull[]>([]);
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [collapsedSwitches, setCollapsedSwitches] = useState<Record<string, boolean>>({});
@@ -171,6 +188,29 @@ export default function TopologyGraph({
     );
   }, [devices, trimmedSearch, isSearching]);
 
+  // Trace upstream network path from gateway/switch down to all matched device nodes
+  const { matchedPathNodeIds, matchedPathLinkPairs } = React.useMemo(() => {
+    if (matchingDeviceIds.size === 0) {
+      return { matchedPathNodeIds: new Set<string>(), matchedPathLinkPairs: new Set<string>() };
+    }
+
+    const pathNodeIds = new Set<string>(matchingDeviceIds);
+    const linkPairs = new Set<string>();
+
+    matchingDeviceIds.forEach(targetId => {
+      let currentDev = devices.find(d => d.id === targetId);
+      while (currentDev && currentDev.parentId) {
+        const parentId = currentDev.parentId;
+        pathNodeIds.add(parentId);
+        linkPairs.add(`${parentId}->${currentDev.id}`);
+        linkPairs.add(`${currentDev.id}->${parentId}`);
+        currentDev = devices.find(d => d.id === parentId);
+      }
+    });
+
+    return { matchedPathNodeIds: pathNodeIds, matchedPathLinkPairs: linkPairs };
+  }, [matchingDeviceIds, devices]);
+
   // Center canvas viewport on a specific node
   const handleCenterOnNode = (deviceId: string) => {
     const pos = positions[deviceId];
@@ -238,26 +278,133 @@ export default function TopologyGraph({
     return new Set(devices.filter(d => d.status === statusFilter).map(d => d.id));
   }, [devices, statusFilter]);
 
-  // Helper function to calculate spacious, non-overlapping hierarchical positions
-  const computeSpaciousLayout = (deviceList: Device[]) => {
+  // Helper function to calculate spacious, non-overlapping hierarchical or clustered positions
+  const computeSpaciousLayout = (deviceList: Device[], mode: 'none' | 'subnet' | 'parent' = clusterMode) => {
     if (!deviceList || deviceList.length === 0) return {};
 
+    if (mode === 'subnet') {
+      // Group devices by IP subnet prefix (e.g., 192.168.1)
+      const subnetGroups: Record<string, Device[]> = {};
+      deviceList.forEach(d => {
+        const parts = d.ip.split('.');
+        const subnetKey = parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}` : 'Other Subnets';
+        if (!subnetGroups[subnetKey]) subnetGroups[subnetKey] = [];
+        subnetGroups[subnetKey].push(d);
+      });
+
+      const keys = Object.keys(subnetGroups);
+      const hulls: ClusterHull[] = [];
+      const newPositions: Record<string, NodePosition> = {};
+
+      const cols = Math.min(3, Math.max(1, keys.length));
+      const colWidth = 1100 / cols;
+
+      keys.forEach((key, keyIdx) => {
+        const col = keyIdx % cols;
+        const row = Math.floor(keyIdx / cols);
+        const cx = 220 + col * colWidth;
+        const cy = 200 + row * 350;
+
+        const groupDevs = subnetGroups[key];
+        const count = groupDevs.length;
+        const radius = Math.max(90, Math.min(180, count * 22));
+
+        groupDevs.forEach((dev, idx) => {
+          const angle = (idx / count) * 2 * Math.PI - Math.PI / 2;
+          const x = cx + radius * Math.cos(angle);
+          const y = cy + radius * Math.sin(angle);
+          newPositions[dev.id] = { id: dev.id, x, y, originalX: x, originalY: y, level: 1 };
+        });
+
+        hulls.push({
+          id: `hull-${key}`,
+          title: `Subnet ${key}.0/24`,
+          subtitle: `${count} connected host${count > 1 ? 's' : ''}`,
+          x: cx - radius - 55,
+          y: cy - radius - 55,
+          width: (radius + 55) * 2,
+          height: (radius + 55) * 2,
+          count
+        });
+      });
+
+      setClusterHulls(hulls);
+      return newPositions;
+    }
+
+    if (mode === 'parent') {
+      // Group devices by parentId
+      const parentGroups: Record<string, Device[]> = {};
+      deviceList.forEach(d => {
+        const parentKey = d.parentId || 'root';
+        if (!parentGroups[parentKey]) parentGroups[parentKey] = [];
+        parentGroups[parentKey].push(d);
+      });
+
+      const parentKeys = Object.keys(parentGroups);
+      const hulls: ClusterHull[] = [];
+      const newPositions: Record<string, NodePosition> = {};
+
+      const cols = Math.min(3, Math.max(1, parentKeys.length));
+      const colWidth = 1100 / cols;
+
+      parentKeys.forEach((key, keyIdx) => {
+        const col = keyIdx % cols;
+        const row = Math.floor(keyIdx / cols);
+        const cx = 220 + col * colWidth;
+        const cy = 200 + row * 350;
+
+        const groupDevs = parentGroups[key];
+        const parentDev = deviceList.find(d => d.id === key);
+        const parentName = parentDev ? parentDev.name : (key === 'root' ? 'Core Gateway / Root' : `Switch ${key}`);
+
+        if (parentDev) {
+          newPositions[parentDev.id] = { id: parentDev.id, x: cx, y: cy, originalX: cx, originalY: cy, level: 0 };
+        }
+
+        const children = groupDevs.filter(d => d.id !== key);
+        const count = children.length;
+        const radius = Math.max(100, Math.min(190, count * 24));
+
+        children.forEach((child, idx) => {
+          const angle = (idx / count) * 2 * Math.PI - Math.PI / 2;
+          const x = cx + radius * Math.cos(angle);
+          const y = cy + radius * Math.sin(angle);
+          newPositions[child.id] = { id: child.id, x, y, originalX: x, originalY: y, level: 1 };
+        });
+
+        hulls.push({
+          id: `hull-parent-${key}`,
+          title: parentName,
+          subtitle: `${count} child device${count > 1 ? 's' : ''}`,
+          x: cx - radius - 60,
+          y: cy - radius - 60,
+          width: (radius + 60) * 2,
+          height: (radius + 60) * 2,
+          count
+        });
+      });
+
+      setClusterHulls(hulls);
+      return newPositions;
+    }
+
+    // Standard hierarchical layout
+    setClusterHulls([]);
     const modem = deviceList.find(d => d.deviceType === 'modem');
     const firewall = deviceList.find(d => d.deviceType === 'firewall');
     const routers = deviceList.filter(d => d.deviceType === 'router');
     const switches = deviceList.filter(d => d.deviceType === 'switch');
 
     const newPositions: Record<string, NodePosition> = {};
-    const width = 1200; // Spacious 1200px width
+    const width = 1200;
 
     const assign = (id: string, x: number, y: number, level: number) => {
       newPositions[id] = { id, x, y, originalX: x, originalY: y, level };
     };
 
-    // Level 0: Modem at top-center
     if (modem) assign(modem.id, width / 2, 50, 0);
 
-    // Level 1: Firewalls & Routers
     const l1Devices = [...routers];
     if (firewall) l1Devices.unshift(firewall);
     const l1Gap = Math.max(240, width / (l1Devices.length + 1));
@@ -266,14 +413,12 @@ export default function TopologyGraph({
       assign(d.id, x, 145, 1);
     });
 
-    // Level 2: Ethernet Switches
     const swGap = Math.max(260, width / (switches.length + 1));
     switches.forEach((sw, idx) => {
       const x = switches.length === 1 ? width / 2 : swGap * (idx + 1);
       assign(sw.id, x, 245, 2);
     });
 
-    // Recursive placement of leaf nodes & endpoints with ample clearance for full device names
     const placeChildrenOf = (parentId: string, currentLevel: number, startY: number) => {
       const children = deviceList.filter(d => d.parentId === parentId && !newPositions[d.id]);
       if (children.length === 0) return;
@@ -284,14 +429,12 @@ export default function TopologyGraph({
       const parentX = parentPos.x;
       const totalChildren = children.length;
 
-      // Minimum horizontal distance between node centers to fit full device names without label collision (210px)
       const NODE_CENTER_GAP = 210;
       const totalSpan = (totalChildren - 1) * NODE_CENTER_GAP;
       const startX = parentX - totalSpan / 2;
 
       children.forEach((child, idx) => {
         const x = totalChildren === 1 ? parentX : startX + idx * NODE_CENTER_GAP;
-        // Stagger Y position slightly if there are many sibling nodes to prevent side-by-side or label crowding
         const staggerY = totalChildren > 3 ? (idx % 2 === 0 ? 0 : 55) : 0;
         const y = startY + 115 + staggerY;
 
@@ -304,7 +447,6 @@ export default function TopologyGraph({
     routers.forEach(r => placeChildrenOf(r.id, 2, 145));
     if (firewall) placeChildrenOf(firewall.id, 2, 145);
 
-    // Any unparented devices
     const unassigned = deviceList.filter(d => !newPositions[d.id]);
     if (unassigned.length > 0) {
       const unGap = Math.max(210, width / (unassigned.length + 1));
@@ -313,7 +455,6 @@ export default function TopologyGraph({
       });
     }
 
-    // MULTI-PASS COLLISION RESOLUTION to guarantee zero overlap of device labels
     const posArray = Object.values(newPositions);
     for (let pass = 0; pass < 3; pass++) {
       for (let i = 0; i < posArray.length; i++) {
@@ -321,10 +462,9 @@ export default function TopologyGraph({
           const n1 = posArray[i];
           const n2 = posArray[j];
 
-          // Check nodes on similar vertical bands
           if (Math.abs(n1.y - n2.y) < 55) {
             const dx = n2.x - n1.x;
-            const minDist = 200; // minimum gap
+            const minDist = 200;
             if (Math.abs(dx) < minDist) {
               const overlap = minDist - Math.abs(dx);
               const shift = overlap / 2 + 5;
@@ -347,29 +487,30 @@ export default function TopologyGraph({
   // Explicit Auto-Arrange positioning layout function
   const handleAutoArrange = () => {
     if (!devices || devices.length === 0) return;
-    const computed = computeSpaciousLayout(devices);
+    const computed = computeSpaciousLayout(devices, clusterMode);
     setPositions(computed);
     setZoomScale(1);
     setPanOffset({ x: 0, y: 0 });
   };
 
-  // Calculate hierarchical positions whenever devices list changes
+  // Calculate hierarchical or clustered positions whenever devices list or clusterMode changes
   useEffect(() => {
     if (!devices || devices.length === 0) return;
-    const newPositions = computeSpaciousLayout(devices);
+    const newPositions = computeSpaciousLayout(devices, clusterMode);
 
-    // Merge or maintain custom dragged offsets if positions already exist
     setPositions(prev => {
       const merged = { ...newPositions };
-      Object.keys(prev).forEach(key => {
-        if (merged[key] && prev[key] && (prev[key].x !== prev[key].originalX || prev[key].y !== prev[key].originalY)) {
-          merged[key].x = prev[key].x;
-          merged[key].y = prev[key].y;
-        }
-      });
+      if (clusterMode === 'none') {
+        Object.keys(prev).forEach(key => {
+          if (merged[key] && prev[key] && (prev[key].x !== prev[key].originalX || prev[key].y !== prev[key].originalY)) {
+            merged[key].x = prev[key].x;
+            merged[key].y = prev[key].y;
+          }
+        });
+      }
       return merged;
     });
-  }, [devices]);
+  }, [devices, clusterMode]);
 
   // Handle Dragging
   const handleMouseDown = (e: React.MouseEvent, id: string) => {
@@ -432,6 +573,29 @@ export default function TopologyGraph({
       ...prev,
       [id]: !prev[id]
     }));
+  };
+
+  // Helper function to recursively check if a device is hidden by any collapsed ancestor (switch, AP, extender, router, etc.)
+  const isNodeHiddenByAncestor = (deviceId: string): boolean => {
+    let currentDev = devices.find(d => d.id === deviceId);
+    while (currentDev && currentDev.parentId) {
+      if (collapsedSwitches[currentDev.parentId]) {
+        return true;
+      }
+      currentDev = devices.find(d => d.id === currentDev.parentId);
+    }
+    return false;
+  };
+
+  // Helper function to calculate total sub-tree descendant count for collapsible badges (+N)
+  const getSubtreeCount = (parentId: string): number => {
+    let count = 0;
+    const children = devices.filter(d => d.parentId === parentId);
+    count += children.length;
+    children.forEach(child => {
+      count += getSubtreeCount(child.id);
+    });
+    return count;
   };
 
   // Reset positions to default layout
@@ -605,23 +769,144 @@ export default function TopologyGraph({
           if (type === 'switch') {
             return (
               <g id="switch-hardware">
-                {/* Modern light gray rack-switch */}
-                <rect x="-19" y="-8" width="38" height="16" rx="1.5" fill="#f1f5f9" className="dark:fill-zinc-800" stroke="#cbd5e1" strokeWidth="0.8" />
-                <rect x="-15" y="-2" width="30" height="7" fill="#e2e8f0" className="dark:fill-zinc-950" rx="1" />
+                {/* Managed 16-port Rackmount Switch Chassis */}
+                <rect x="-19" y="-9" width="38" height="18" rx="2" fill="#1e293b" className="dark:fill-zinc-800" stroke="#475569" strokeWidth="0.8" />
+                <rect x="-16" y="-5" width="32" height="10" fill="#0f172a" className="dark:fill-zinc-950" rx="1" />
                 
-                {/* Square Ports */}
-                <rect x="-12" y="-0.5" width="2.2" height="2.2" fill="#94a3b8" rx="0.3" />
-                <rect x="-7" y="-0.5" width="2.2" height="2.2" fill="#94a3b8" rx="0.3" />
-                <rect x="-2" y="-0.5" width="2.2" height="2.2" fill="#94a3b8" rx="0.3" />
-                <rect x="3" y="-0.5" width="2.2" height="2.2" fill="#94a3b8" rx="0.3" />
-                <rect x="8" y="-0.5" width="2.2" height="2.2" fill="#94a3b8" rx="0.3" />
+                {/* Console Port & Power LED */}
+                <rect x="-14" y="-3" width="3" height="3" fill="#3b82f6" rx="0.5" />
+                <circle cx="-14" cy="3" r="0.7" fill={isOnline ? "#10b981" : "#ef4444"} />
 
-                {/* Soft port links */}
-                <circle cx="-10.9" cy="-1.2" r="0.5" fill={isOnline ? "#10b981" : "#94a3b8"} />
-                <circle cx="-5.9" cy="-1.2" r="0.5" fill={isOnline ? "#10b981" : "#94a3b8"} />
-                <circle cx="-0.9" cy="-1.2" r="0.5" fill={isOnline ? "#3b82f6" : "#94a3b8"} />
-                <circle cx="4.1" cy="-1.2" r="0.5" fill={isOnline ? "#10b981" : "#94a3b8"} />
-                <circle cx="9.1" cy="-1.2" r="0.5" fill={isOnline ? "#10b981" : "#94a3b8"} />
+                {/* Ethernet RJ45 Ports Matrix (Upper & Lower Row) */}
+                <g transform="translate(-8, -3)">
+                  <rect x="0" y="0" width="2.2" height="2" fill="#64748b" rx="0.3" />
+                  <rect x="4" y="0" width="2.2" height="2" fill="#64748b" rx="0.3" />
+                  <rect x="8" y="0" width="2.2" height="2" fill="#64748b" rx="0.3" />
+                  <rect x="12" y="0" width="2.2" height="2" fill="#64748b" rx="0.3" />
+                  <rect x="16" y="0" width="2.2" height="2" fill="#64748b" rx="0.3" />
+                  <rect x="20" y="0" width="2.2" height="2" fill="#64748b" rx="0.3" />
+                  
+                  <rect x="0" y="3.5" width="2.2" height="2" fill="#64748b" rx="0.3" />
+                  <rect x="4" y="3.5" width="2.2" height="2" fill="#64748b" rx="0.3" />
+                  <rect x="8" y="3.5" width="2.2" height="2" fill="#64748b" rx="0.3" />
+                  <rect x="12" y="3.5" width="2.2" height="2" fill="#64748b" rx="0.3" />
+                  <rect x="16" y="3.5" width="2.2" height="2" fill="#64748b" rx="0.3" />
+                  <rect x="20" y="3.5" width="2.2" height="2" fill="#64748b" rx="0.3" />
+
+                  {/* Port Activity LEDs */}
+                  <circle cx="1.1" cy="-1" r="0.5" fill={isOnline ? "#10b981" : "#64748b"} />
+                  <circle cx="5.1" cy="-1" r="0.5" fill={isOnline ? "#10b981" : "#64748b"} />
+                  <circle cx="9.1" cy="-1" r="0.5" fill={isOnline ? "#3b82f6" : "#64748b"} />
+                  <circle cx="13.1" cy="-1" r="0.5" fill={isOnline ? "#10b981" : "#64748b"} />
+                  <circle cx="17.1" cy="-1" r="0.5" fill={isOnline ? "#10b981" : "#64748b"} />
+                  <circle cx="21.1" cy="-1" r="0.5" fill={isOnline ? "#10b981" : "#64748b"} />
+                </g>
+              </g>
+            );
+          }
+
+          if (type === 'unmanaged_switch') {
+            return (
+              <g id="unmanaged-switch-hardware">
+                {/* Compact 5/8-port Desktop Metal Switch */}
+                <rect x="-17" y="-7" width="34" height="14" rx="2" fill="#334155" className="dark:fill-slate-800" stroke="#64748b" strokeWidth="0.8" />
+                <rect x="-14" y="-3.5" width="28" height="7" fill="#0f172a" rx="0.8" />
+                
+                {/* Simple Unmanaged Ports */}
+                <rect x="-11" y="-2" width="2.5" height="4" fill="#94a3b8" rx="0.3" />
+                <rect x="-6" y="-2" width="2.5" height="4" fill="#94a3b8" rx="0.3" />
+                <rect x="-1" y="-2" width="2.5" height="4" fill="#94a3b8" rx="0.3" />
+                <rect x="4" y="-2" width="2.5" height="4" fill="#94a3b8" rx="0.3" />
+                <rect x="9" y="-2" width="2.5" height="4" fill="#94a3b8" rx="0.3" />
+
+                {/* Port Activity Link LEDs */}
+                <circle cx="-9.7" cy="-4" r="0.6" fill={isOnline ? "#10b981" : "#64748b"} />
+                <circle cx="-4.7" cy="-4" r="0.6" fill={isOnline ? "#10b981" : "#64748b"} />
+                <circle cx="0.3" cy="-4" r="0.6" fill={isOnline ? "#f59e0b" : "#64748b"} />
+                <circle cx="5.3" cy="-4" r="0.6" fill={isOnline ? "#10b981" : "#64748b"} />
+                <circle cx="10.3" cy="-4" r="0.6" fill={isOnline ? "#10b981" : "#64748b"} />
+              </g>
+            );
+          }
+
+          if (type === 'hub') {
+            return (
+              <g id="hub-hardware">
+                {/* 8-Port Ethernet Hub Chassis (Non-IP Layer 1) */}
+                <rect x="-18" y="-8" width="36" height="16" rx="2" fill="#d97706" className="dark:fill-amber-950/60" stroke="#f59e0b" strokeWidth="0.8" />
+                <rect x="-15" y="-4.5" width="30" height="9" fill="#78350f" rx="1" />
+                
+                {/* Hub Broadcast Ports */}
+                <rect x="-12" y="-3" width="2" height="4" fill="#fbbf24" rx="0.3" />
+                <rect x="-8" y="-3" width="2" height="4" fill="#fbbf24" rx="0.3" />
+                <rect x="-4" y="-3" width="2" height="4" fill="#fbbf24" rx="0.3" />
+                <rect x="0" y="-3" width="2" height="4" fill="#fbbf24" rx="0.3" />
+                <rect x="4" y="-3" width="2" height="4" fill="#fbbf24" rx="0.3" />
+                <rect x="8" y="-3" width="2" height="4" fill="#fbbf24" rx="0.3" />
+
+                {/* Collision LED & Activity LEDs */}
+                <circle cx="-13.5" cy="-5.5" r="0.6" fill={isOnline ? "#ef4444" : "#78350f"} />
+                <circle cx="-10.5" cy="-5.5" r="0.6" fill={isOnline ? "#10b981" : "#78350f"} />
+                <circle cx="-6.5" cy="-5.5" r="0.6" fill={isOnline ? "#10b981" : "#78350f"} />
+                <circle cx="-2.5" cy="-5.5" r="0.6" fill={isOnline ? "#10b981" : "#78350f"} />
+                <circle cx="1.5" cy="-5.5" r="0.6" fill={isOnline ? "#10b981" : "#78350f"} />
+                <circle cx="5.5" cy="-5.5" r="0.6" fill={isOnline ? "#10b981" : "#78350f"} />
+              </g>
+            );
+          }
+
+          if (type === 'mobile' || type === 'phone' || nameLower.includes('phone') || nameLower.includes('iphone') || nameLower.includes('android')) {
+            return (
+              <g id="mobile-hardware">
+                {/* Ultra-sleek Smartphone */}
+                <rect x="-10" y="-17" width="20" height="34" rx="4.5" fill="#020617" stroke="#334155" strokeWidth="1" />
+                {/* Screen glass display */}
+                <rect x="-8.5" y="-15" width="17" height="30" rx="3" fill="#0f172a" />
+                {/* OLED Wallpaper gradient glow */}
+                <rect x="-8.5" y="-15" width="17" height="30" rx="3" fill="url(#mobileWallpaper)" opacity="0.8" />
+                {/* Camera notch / Dynamic Island */}
+                <rect x="-3" y="-14.5" width="6" height="1.8" rx="0.9" fill="#000000" />
+                {/* Home Indicator bar */}
+                <rect x="-3" y="12.5" width="6" height="0.8" rx="0.4" fill="#ffffff" opacity="0.6" />
+                {/* Operating system OS indicator dot */}
+                <circle cx="5" cy="-12" r="1" fill={nameLower.includes('iphone') || nameLower.includes('ios') ? "#38bdf8" : "#a3e635"} />
+              </g>
+            );
+          }
+
+          if (type === 'tablet' || nameLower.includes('ipad') || nameLower.includes('tablet')) {
+            return (
+              <g id="tablet-hardware">
+                {/* Sleek Tablet Chassis */}
+                <rect x="-16" y="-13" width="32" height="26" rx="3.5" fill="#1e293b" stroke="#475569" strokeWidth="1" />
+                <rect x="-14" y="-11" width="28" height="22" rx="2" fill="#020617" />
+                <circle cx="0" cy="-12" r="0.7" fill="#64748b" />
+                {/* Screen Wallpaper preview */}
+                <rect x="-13.5" y="-10.5" width="27" height="21" rx="1.5" fill="url(#mobileWallpaper)" opacity="0.6" />
+              </g>
+            );
+          }
+
+          if (type === 'server' || nameLower.includes('server')) {
+            return (
+              <g id="server-hardware">
+                {/* 2U Enterprise Rack Server Chassis */}
+                <rect x="-18" y="-15" width="36" height="30" rx="2" fill="#1e293b" className="dark:fill-zinc-800" stroke="#475569" strokeWidth="1" />
+                
+                {/* Hot-swap Drive Bay 1 */}
+                <rect x="-14" y="-11" width="28" height="7" rx="0.8" fill="#0f172a" stroke="#334155" strokeWidth="0.5" />
+                <circle cx="9" cy="-7.5" r="0.8" fill={isOnline ? "#10b981" : "#ef4444"} />
+                <line x1="-12" y1="-7.5" x2="5" y2="-7.5" stroke="#334155" strokeWidth="1" />
+
+                {/* Hot-swap Drive Bay 2 */}
+                <rect x="-14" y="-2" width="28" height="7" rx="0.8" fill="#0f172a" stroke="#334155" strokeWidth="0.5" />
+                <circle cx="9" cy="1.5" r="0.8" fill={isOnline ? "#10b981" : "#ef4444"} />
+                <line x1="-12" y1="1.5" x2="5" y2="1.5" stroke="#334155" strokeWidth="1" />
+
+                {/* Hot-swap Drive Bay 3 */}
+                <rect x="-14" y="7" width="28" height="7" rx="0.8" fill="#0f172a" stroke="#334155" strokeWidth="0.5" />
+                <circle cx="9" cy="10.5" r="0.8" fill={isOnline ? "#10b981" : "#ef4444"} />
+                <line x1="-12" y1="10.5" x2="5" y2="10.5" stroke="#334155" strokeWidth="1" />
               </g>
             );
           }
@@ -764,11 +1049,26 @@ export default function TopologyGraph({
         return <Router id="ic_router" className={`${baseClass} ${color}`} />;
       case 'switch':
         return <Network id="ic_switch" className={`${baseClass} ${color}`} />;
+      case 'unmanaged_switch':
+        return <Network id="ic_unmanaged_switch" className={`${baseClass} text-slate-500 dark:text-slate-400`} />;
       case 'ap':
         return <Wifi id="ic_ap" className={`${baseClass} ${color}`} />;
       case 'extender':
         return <Radio id="ic_extender" className={`${baseClass} ${color}`} />;
+      case 'mobile':
+      case 'phone':
+        return <Smartphone id="ic_mobile" className={`${baseClass} ${color}`} />;
+      case 'tablet':
+        return <Tablet id="ic_tablet" className={`${baseClass} ${color}`} />;
+      case 'server':
+        return <Server id="ic_server" className={`${baseClass} ${color}`} />;
       case 'computer':
+        if (nameLower.includes('phone') || nameLower.includes('iphone') || nameLower.includes('android')) {
+          return <Smartphone id="ic_mobile" className={`${baseClass} ${color}`} />;
+        }
+        if (nameLower.includes('ipad') || nameLower.includes('tablet')) {
+          return <Tablet id="ic_tablet" className={`${baseClass} ${color}`} />;
+        }
         if (nameLower.includes('server')) {
           return <Server id="ic_server" className={`${baseClass} ${color}`} />;
         }
@@ -799,20 +1099,19 @@ export default function TopologyGraph({
     }
   };
 
-  // Build active connections lists based on layout map & switch collapse states
+  // Build active connections lists based on layout map & switch/AP/extender collapse states
   const links: { sourceId: string; targetId: string; source: NodePosition; target: NodePosition; status: DeviceStatus }[] = [];
   
   devices.forEach(device => {
     // If device has a parent, draw a line between their coordinates
     if (device.parentId) {
-      const sourceNode = positions[device.parentId];
-      const targetNode = positions[device.id];
-      
-      // Don't show link if the parent switch is collapsed
-      const isParentCollapsed = collapsedSwitches[device.parentId];
-      if (isParentCollapsed && device.deviceType !== 'switch') {
+      // Don't show link if this node or its parent/ancestor is collapsed
+      if (isNodeHiddenByAncestor(device.id)) {
         return;
       }
+
+      const sourceNode = positions[device.parentId];
+      const targetNode = positions[device.id];
 
       if (sourceNode && targetNode) {
         links.push({
@@ -923,8 +1222,54 @@ export default function TopologyGraph({
         </div>
       </div>
 
-      {/* L2 Controls & Auto-Arrange - Top Right */}
-      <div id="canvas_status_filter" className="absolute top-4 right-4 z-10 flex items-center gap-2">
+      {/* L2 Controls, Clustering & Auto-Arrange - Top Right */}
+      <div id="canvas_status_filter" className="absolute top-4 right-4 z-10 flex flex-wrap items-center gap-2">
+        {/* Cluster Mode Toggle Group */}
+        <div id="cluster_mode_selector" className="flex items-center bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-1 rounded-lg text-xs shadow-sm">
+          <span className="text-zinc-400 font-medium px-2 text-[11px] hidden sm:inline">Clustering:</span>
+          <button
+            id="btn_cluster_none"
+            onClick={() => {
+              setClusterMode('none');
+            }}
+            className={`px-2.5 py-1 rounded-md font-semibold text-[11px] transition cursor-pointer ${
+              clusterMode === 'none'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+            }`}
+          >
+            Hierarchical
+          </button>
+          <button
+            id="btn_cluster_subnet"
+            onClick={() => {
+              setClusterMode('subnet');
+            }}
+            className={`px-2.5 py-1 rounded-md font-semibold text-[11px] transition cursor-pointer ${
+              clusterMode === 'subnet'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+            }`}
+            title="Force-directed node clustering by Subnet"
+          >
+            Subnet Cluster
+          </button>
+          <button
+            id="btn_cluster_parent"
+            onClick={() => {
+              setClusterMode('parent');
+            }}
+            className={`px-2.5 py-1 rounded-md font-semibold text-[11px] transition cursor-pointer ${
+              clusterMode === 'parent'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+            }`}
+            title="Force-directed node clustering by Parent Switch"
+          >
+            Parent Cluster
+          </button>
+        </div>
+
         <button
           id="btn_auto_arrange_topology"
           onClick={handleAutoArrange}
@@ -966,6 +1311,11 @@ export default function TopologyGraph({
         }}
       >
         <defs>
+          <linearGradient id="mobileWallpaper" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#0284c7" />
+            <stop offset="50%" stopColor="#6366f1" />
+            <stop offset="100%" stopColor="#ec4899" />
+          </linearGradient>
           <linearGradient id="linkGradientOnline" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor="#10b981" stopOpacity="0.4" />
             <stop offset="100%" stopColor="#10b981" stopOpacity="0.1" />
@@ -992,10 +1342,57 @@ export default function TopologyGraph({
           </linearGradient>
         </defs>
 
+        {/* CLUSTER BOUNDARY HULL BUBBLES */}
+        {clusterMode !== 'none' && (
+          <g id="cluster_hulls_group">
+            {clusterHulls.map((hull) => (
+              <g key={hull.id} className="transition-all duration-300">
+                <rect
+                  x={hull.x}
+                  y={hull.y}
+                  width={hull.width}
+                  height={hull.height}
+                  rx="24"
+                  ry="24"
+                  fill="rgba(59, 130, 246, 0.04)"
+                  stroke="rgba(59, 130, 246, 0.35)"
+                  strokeWidth="1.5"
+                  strokeDasharray="6 4"
+                  className="dark:fill-blue-950/20 dark:stroke-blue-500/40"
+                />
+                <g transform={`translate(${hull.x + 16}, ${hull.y + 20})`}>
+                  <rect
+                    x="0"
+                    y="-14"
+                    width={Math.max(130, hull.title.length * 7.5 + 20)}
+                    height="22"
+                    rx="6"
+                    fill="#eff6ff"
+                    stroke="#bfdbfe"
+                    strokeWidth="0.8"
+                    className="dark:fill-blue-950 dark:stroke-blue-800"
+                  />
+                  <text
+                    x="8"
+                    y="0"
+                    fill="#1e40af"
+                    fontSize="10"
+                    fontWeight="bold"
+                    fontFamily="sans-serif"
+                    className="dark:fill-blue-300"
+                  >
+                    {hull.title} ({hull.count})
+                  </text>
+                </g>
+              </g>
+            ))}
+          </g>
+        )}
+
         {/* CONNECTION CABLES / LINKS */}
         <g id="topology_links_group">
           {links.map((link, idx) => {
-            // Check visibility based on visibleDeviceIds set (preserves connected infrastructure for rejected devices)
+            // Check visibility based on visibleDeviceIds set
             const sourceDev = devices.find(d => d.id === link.sourceId);
             const targetDev = devices.find(d => d.id === link.targetId);
             const sourceVisible = !sourceDev || visibleDeviceIds.has(sourceDev.id);
@@ -1006,17 +1403,17 @@ export default function TopologyGraph({
 
             const isOnline = link.status === 'online';
             const isSleep = link.status === 'sleep';
-            const strokeColor = isOnline 
-              ? 'url(#linkGradientOnline)' 
-              : isSleep 
-                ? 'url(#linkGradientSleep)' 
-                : 'url(#linkGradientOffline)';
             
+            const isPathHighlighted = isSearching && (
+              matchedPathLinkPairs.has(`${link.sourceId}->${link.targetId}`) ||
+              matchedPathLinkPairs.has(`${link.targetId}->${link.sourceId}`)
+            );
+
             const isConnectedToMatch = isSearching && (
               (sourceDev && matchingDeviceIds.has(sourceDev.id)) ||
               (targetDev && matchingDeviceIds.has(targetDev.id))
             );
-            const linkOpacity = isSearching ? (isConnectedToMatch ? 0.95 : 0.15) : 0.6;
+            const linkOpacity = isSearching ? (isPathHighlighted || isConnectedToMatch ? 0.95 : 0.12) : 0.6;
 
             return (
               <g key={`link-${idx}`} style={{ opacity: linkOpacity, transition: 'opacity 0.2s ease' }}>
@@ -1026,17 +1423,17 @@ export default function TopologyGraph({
                   y1={link.source.y}
                   x2={link.target.x}
                   y2={link.target.y}
-                  stroke={isOnline ? '#059669' : isSleep ? '#d97706' : '#f43f5e'}
-                  strokeWidth={isOnline ? 1.5 : 1}
-                  strokeDasharray={link.status === 'offline' ? '4 4' : undefined}
-                  className="transition-all duration-300 opacity-60"
+                  stroke={isPathHighlighted ? '#0284c7' : (isOnline ? '#059669' : isSleep ? '#d97706' : '#f43f5e')}
+                  strokeWidth={isPathHighlighted ? 3.5 : (isOnline ? 1.5 : 1)}
+                  strokeDasharray={isPathHighlighted ? '6 3' : (link.status === 'offline' ? '4 4' : undefined)}
+                  className={isPathHighlighted ? 'animate-pulse transition-all duration-300' : 'transition-all duration-300 opacity-60'}
                 />
                 
                 {/* Moving Packet Dot Animation on active links */}
-                {isOnline && (
-                  <circle r="3.5" fill="#34d399" className="opacity-90">
+                {(isOnline || isPathHighlighted) && (
+                  <circle r={isPathHighlighted ? 4.5 : 3.5} fill={isPathHighlighted ? '#38bdf8' : '#34d399'} className="opacity-90">
                     <animateMotion
-                      dur={`${Math.max(1.5, Math.min(4, 5 / (link.source.level + 1)))}s`}
+                      dur={`${Math.max(1.2, Math.min(3.5, 4 / (link.source.level + 1)))}s`}
                       repeatCount="indefinite"
                       path={`M ${link.source.x} ${link.source.y} L ${link.target.x} ${link.target.y}`}
                     />
@@ -1058,20 +1455,20 @@ export default function TopologyGraph({
               return null;
             }
 
-            // If node is an endpoint and its parent is collapsed, do not render it on the graph
-            const isParentCollapsed = device.parentId && collapsedSwitches[device.parentId];
-            if (isParentCollapsed && device.deviceType !== 'switch') {
+            // If node is hidden beneath any collapsed ancestor (switch, AP, extender, router), do not render it
+            if (isNodeHiddenByAncestor(device.id)) {
               return null;
             }
 
             const isSelected = selectedDevice?.id === device.id;
-            const isSwitch = device.deviceType === 'switch';
+            const isCollapsibleType = ['switch', 'unmanaged_switch', 'hub', 'ap', 'extender', 'router', 'modem', 'firewall'].includes(device.deviceType);
             const isCollapsed = collapsedSwitches[device.id];
             const isMatch = isSearching && matchingDeviceIds.has(device.id);
-            const nodeOpacity = isSearching ? (isMatch ? 1 : 0.22) : 1;
+            const isPathNode = isSearching && matchedPathNodeIds.has(device.id);
+            const nodeOpacity = isSearching ? (isMatch || isPathNode ? 1 : 0.18) : 1;
 
-            // Count endpoints connected to this switch
-            const connectedEndpointsCount = devices.filter(d => d.parentId === device.id && d.deviceType !== 'switch').length;
+            // Count total sub-tree descendants connected beneath this device
+            const totalSubtreeDescendants = getSubtreeCount(device.id);
 
             return (
               <g
@@ -1089,6 +1486,56 @@ export default function TopologyGraph({
                 style={{ opacity: nodeOpacity, transition: 'opacity 0.2s ease' }}
                 className="cursor-grab active:cursor-grabbing group"
               >
+                {/* Active Scan or Diagnostic Ping Ripple Animation */}
+                {((isPinging && pingingDevice?.id === device.id) || (isScanning && device.status === 'online')) && (
+                  <g id={`scan-ripple-${device.id}`} pointerEvents="none">
+                    <circle
+                      cx="0"
+                      cy="0"
+                      r="28"
+                      fill="none"
+                      stroke={isPinging ? "#3b82f6" : "#10b981"}
+                      strokeWidth="2"
+                      className="animate-ping"
+                      opacity="0.8"
+                    />
+                    <circle
+                      cx="0"
+                      cy="0"
+                      r="42"
+                      fill="none"
+                      stroke={isPinging ? "#60a5fa" : "#34d399"}
+                      strokeWidth="1.5"
+                      className="animate-ping"
+                      style={{ animationDuration: '1.4s', animationDelay: '0.2s' }}
+                      opacity="0.5"
+                    />
+                    <circle
+                      cx="0"
+                      cy="0"
+                      r="56"
+                      fill="none"
+                      stroke={isPinging ? "#93c5fd" : "#a7f3d0"}
+                      strokeWidth="1"
+                      className="animate-ping"
+                      style={{ animationDuration: '1.8s', animationDelay: '0.5s' }}
+                      opacity="0.3"
+                    />
+                  </g>
+                )}
+
+                {/* Path Node Intermediate Highlight Aura */}
+                {isSearching && isPathNode && !isMatch && (
+                  <circle
+                    r="36"
+                    fill="rgba(2, 132, 199, 0.12)"
+                    stroke="#0284c7"
+                    strokeWidth="1.8"
+                    strokeDasharray="4 3"
+                    className="animate-pulse"
+                  />
+                )}
+
                 {/* Search Match Glowing Pulsing Highlight Ring */}
                 {isMatch && (
                   <g id={`match-highlight-${device.id}`}>
@@ -1146,22 +1593,24 @@ export default function TopologyGraph({
                 {/* Realistic Hardware Module Drawing */}
                 {renderRealisticDeviceHardware(device.deviceType, device.status, device.name, isSelected)}
 
-                {/* Switch Expand/Collapse Badge overlay */}
-                {isSwitch && connectedEndpointsCount > 0 && (
+                {/* Expand/Collapse Badge overlay for Switches, Access Points, Extenders & Routers */}
+                {isCollapsibleType && totalSubtreeDescendants > 0 && (
                   <g 
                     transform="translate(24, -24)"
                     onClick={(e) => toggleCollapseSwitch(device.id, e)}
                     className="cursor-pointer"
+                    title={isCollapsed ? `Expand ${device.name} (${totalSubtreeDescendants} hidden nodes)` : `Collapse ${device.name}`}
                   >
-                    <circle r="10" fill="#3b82f6" className="stroke-white dark:stroke-zinc-900" strokeWidth="1.5" />
+                    <circle r="10.5" fill="#3b82f6" className="stroke-white dark:stroke-zinc-900 shadow-sm" strokeWidth="1.5" />
                     <text
                       textAnchor="middle"
                       dy="3.5"
                       fill="#ffffff"
-                      fontSize="9"
+                      fontSize="8.5"
                       fontWeight="bold"
+                      className="font-mono"
                     >
-                      {isCollapsed ? `+${connectedEndpointsCount}` : '-'}
+                      {isCollapsed ? `+${totalSubtreeDescendants}` : '-'}
                     </text>
                   </g>
                 )}
